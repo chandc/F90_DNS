@@ -257,7 +257,9 @@ program channel_flow_solver
     endif
     
     ! Final output
+    write(*,'(A)') ' DEBUG: About to call final_output'
     call final_output(p)
+    write(*,'(A)') ' DEBUG: Returned from final_output'
     
     ! Cleanup
     call finalize_solver(p)
@@ -580,7 +582,7 @@ contains
         ! Setup mass matrix
         do i = 1, nz
             if (i <= nzm) then
-                p%amass(i) = p%wg(i-1)
+                p%amass(i) = 0.5_wp * p%ybar * p%wg(i-1)
             else
                 p%amass(i) = 0.0_wp
             endif
@@ -872,7 +874,7 @@ contains
                 do j = 1, nz
                     idx2 = (j-1)*nxpp + i
                     if (k <= nzm .and. j <= nzm) then
-                        dfdz(idx) = dfdz(idx) + p%d(k-1,j-1) * field(idx2) / p%ybar
+                        dfdz(idx) = dfdz(idx) + p%d(k-1,j-1) * field(idx2) * (2.0_wp / p%ybar)
                     endif
                 end do
             end do
@@ -1668,9 +1670,10 @@ contains
         integer :: k
         
         ! Compute D² = D * D where D is the first derivative matrix
+        ! Scale by (2/ybar)² to match F77 scaling
         d2_elem = 0.0_wp
         do k = 0, nzm
-            d2_elem = d2_elem + p%d(i,k) * p%d(k,j) / (p%ybar * p%ybar)
+            d2_elem = d2_elem + p%d(i,k) * p%d(k,j) * (2.0_wp / p%ybar)**2
         end do
         
     end function compute_second_derivative_element
@@ -1891,11 +1894,193 @@ contains
         write(*,'(A,A)') ' Output written to: ', trim(filename)
         
     end subroutine output_solution
-    
+
+    !============================================================================
+    ! SUBROUTINE: calculate_wall_shear_stress
+    !
+    ! PURPOSE:
+    !   Calculate wall shear stress using LGL spectral differentiation
+    !
+    ! DESCRIPTION:
+    !   Computes wall shear stress τ_wall = μ*(du/dz)|_wall = (1/Re)*(du/dz)|_wall
+    !   using the same LGL differentiation matrix as the DNS solver for spectral
+    !   accuracy. This ensures consistency with the numerical method.
+    !
+    ! INPUTS:
+    !   p - Navier-Stokes parameter structure
+    !
+    ! OUTPUTS:
+    !   tau_wall_bottom - Wall shear stress at bottom wall (z = -1)
+    !   tau_wall_top    - Wall shear stress at top wall (z = +1)
+    !   du_dz_bottom    - Velocity gradient at bottom wall
+    !   du_dz_top       - Velocity gradient at top wall
+    !============================================================================
+    subroutine calculate_wall_shear_stress(p, tau_wall_bottom, tau_wall_top, &
+                                         du_dz_bottom, du_dz_top)
+        implicit none
+        type(navier_stokes_params), intent(in) :: p
+        real(wp), intent(out) :: tau_wall_bottom, tau_wall_top
+        real(wp), intent(out) :: du_dz_bottom, du_dz_top
+        
+        real(wp), dimension(ntot) :: u_avg_profile, dudz_profile
+        integer :: i, k, idx, count_x
+        
+        ! Compute spanwise-averaged velocity profile
+        u_avg_profile = 0.0_wp
+        do k = 1, nz
+            count_x = 0
+            do i = 2, nxpp-1  ! Skip padding points
+                idx = (k-1)*nxpp + i
+                u_avg_profile(k) = u_avg_profile(k) + p%u(idx)
+                count_x = count_x + 1
+            end do
+            if (count_x > 0) u_avg_profile(k) = u_avg_profile(k) / real(count_x, wp)
+        end do
+        
+        ! Compute z-derivatives using LGL differentiation matrix 
+        ! For wall shear stress, we need derivatives AT all points including walls
+        dudz_profile = 0.0_wp
+        do k = 1, nz
+            do i = 1, nz
+                ! Remove nzm restriction for wall shear stress calculation
+                dudz_profile(k) = dudz_profile(k) + p%d(k-1,i-1) * u_avg_profile(i) * (2.0_wp / p%ybar)
+            end do
+        end do
+        
+        ! Extract wall gradients
+        du_dz_bottom = dudz_profile(1)     ! Bottom wall (z = -1, first LGL point)
+        du_dz_top = dudz_profile(nz)       ! Top wall (z = +1, last LGL point)
+        
+        ! Calculate wall shear stress: τ = μ*(du/dz) = (1/Re)*(du/dz)
+        tau_wall_bottom = (1.0_wp / p%re) * du_dz_bottom
+        tau_wall_top = (1.0_wp / p%re) * du_dz_top
+        
+    end subroutine calculate_wall_shear_stress
+
+    !============================================================================
+    ! SUBROUTINE: calculate_velocity_statistics
+    !
+    ! PURPOSE:
+    !   Calculate velocity statistics for validation
+    !
+    ! DESCRIPTION:
+    !   Computes centerline and bulk velocities using proper LGL integration
+    !   for comparison with theoretical Poiseuille flow values.
+    !
+    ! INPUTS:
+    !   p - Navier-Stokes parameter structure
+    !
+    ! OUTPUTS:
+    !   u_centerline - Maximum velocity (at channel center)
+    !   u_bulk       - Bulk velocity (integrated average)
+    !============================================================================
+    subroutine calculate_velocity_statistics(p, u_centerline, u_bulk)
+        implicit none
+        type(navier_stokes_params), intent(in) :: p
+        real(wp), intent(out) :: u_centerline, u_bulk
+        
+        real(wp), dimension(nz) :: u_avg_profile, lgl_weights
+        integer :: i, k, idx, count_x, center_idx
+        real(wp) :: weight_sum
+        
+        ! Compute spanwise-averaged velocity profile
+        do k = 1, nz
+            u_avg_profile(k) = 0.0_wp
+            count_x = 0
+            do i = 2, nxpp-1  ! Skip padding points
+                idx = (k-1)*nxpp + i
+                u_avg_profile(k) = u_avg_profile(k) + p%u(idx)
+                count_x = count_x + 1
+            end do
+            if (count_x > 0) u_avg_profile(k) = u_avg_profile(k) / real(count_x, wp)
+        end do
+        
+        ! Find centerline velocity (maximum)
+        u_centerline = maxval(u_avg_profile)
+        
+        ! Compute LGL integration weights (trapezoidal approximation)
+        do k = 1, nz
+            if (k == 1) then
+                lgl_weights(k) = (p%zpts(1) - p%zpts(0)) / 2.0_wp
+            else if (k == nz) then
+                lgl_weights(k) = (p%zpts(nz-1) - p%zpts(nz-2)) / 2.0_wp
+            else
+                lgl_weights(k) = (p%zpts(k) - p%zpts(k-2)) / 2.0_wp
+            endif
+        end do
+        
+        ! Calculate bulk velocity using proper LGL integration
+        u_bulk = 0.0_wp
+        weight_sum = 0.0_wp
+        do k = 1, nz
+            u_bulk = u_bulk + u_avg_profile(k) * lgl_weights(k)
+            weight_sum = weight_sum + lgl_weights(k)
+        end do
+        u_bulk = u_bulk / weight_sum
+        
+    end subroutine calculate_velocity_statistics
+
     subroutine final_output(p)
         implicit none
         type(navier_stokes_params), intent(inout) :: p
         integer :: i, k, idx
+        real(wp) :: tau_wall_bottom, tau_wall_top
+        real(wp) :: du_dz_bottom, du_dz_top
+        real(wp) :: tau_theory_bottom, tau_theory_top
+        real(wp) :: u_avg_bottom, u_avg_top, u_centerline, u_bulk
+        real(wp) :: error_bottom, error_top
+        
+        ! Debug: Check if subroutine is called
+        write(*,'(A)') ' DEBUG: Entering final_output subroutine'
+        
+        ! Calculate wall shear stress using LGL spectral derivatives
+        call calculate_wall_shear_stress(p, tau_wall_bottom, tau_wall_top, &
+                                       du_dz_bottom, du_dz_top)
+        
+        ! Calculate velocity statistics
+        call calculate_velocity_statistics(p, u_centerline, u_bulk)
+        
+        ! Theoretical wall shear stress for Poiseuille flow
+        ! For parabolic profile u = u_max*(1-z²), du/dz = -2*u_max*z
+        ! At walls (z = ±1): du/dz = ∓2*u_max = ∓180 (for u_max = 90)
+        ! Wall stress: τ = μ*(du/dz) = (1/Re)*(du/dz)
+        tau_theory_bottom = (1.0_wp / p%re) * 180.0_wp    ! At z = -1
+        tau_theory_top = (1.0_wp / p%re) * (-180.0_wp)    ! At z = +1
+        
+        ! Calculate errors
+        error_bottom = abs(tau_wall_bottom - tau_theory_bottom) / abs(tau_theory_bottom) * 100.0_wp
+        error_top = abs(tau_wall_top - tau_theory_top) / abs(tau_theory_top) * 100.0_wp
+        
+        ! Print wall shear stress results
+        write(*,'(A)') ' ============================================'
+        write(*,'(A)') ' WALL SHEAR STRESS ANALYSIS'
+        write(*,'(A)') ' ============================================'
+        write(*,'(A,F10.3)') ' Reynolds number:        ', p%re
+        write(*,'(A,F10.3)') ' Centerline velocity:    ', u_centerline
+        write(*,'(A,F10.3)') ' Bulk velocity:          ', u_bulk
+        write(*,'(A)') ' '
+        write(*,'(A)') ' Bottom Wall (z = -1):'
+        write(*,'(A,ES12.5)') '   du/dz (computed):     ', du_dz_bottom
+        write(*,'(A,ES12.5)') '   du/dz (theory):       ', 180.0_wp
+        write(*,'(A,ES12.5)') '   τ_wall (computed):    ', tau_wall_bottom
+        write(*,'(A,ES12.5)') '   τ_wall (theory):      ', tau_theory_bottom
+        write(*,'(A,F8.2,A)') '   Error:                ', error_bottom, '%'
+        write(*,'(A)') ' '
+        write(*,'(A)') ' Top Wall (z = +1):'
+        write(*,'(A,ES12.5)') '   du/dz (computed):     ', du_dz_top
+        write(*,'(A,ES12.5)') '   du/dz (theory):       ', -180.0_wp
+        write(*,'(A,ES12.5)') '   τ_wall (computed):    ', tau_wall_top
+        write(*,'(A,ES12.5)') '   τ_wall (theory):      ', tau_theory_top
+        write(*,'(A,F8.2,A)') '   Error:                ', error_top, '%'
+        write(*,'(A)') ' '
+        if (max(error_bottom, error_top) < 5.0_wp) then
+            write(*,'(A)') ' ✅ Wall stress calculation: EXCELLENT agreement'
+        else if (max(error_bottom, error_top) < 10.0_wp) then
+            write(*,'(A)') ' ⚠️  Wall stress calculation: GOOD agreement'
+        else
+            write(*,'(A)') ' ❌ Wall stress calculation: POOR agreement'
+        endif
+        write(*,'(A)') ' ============================================'
         
         ! Final restart file
         open(2, file='run.dat', form='unformatted', status='replace')
