@@ -1,0 +1,31 @@
+&grid
+  nx_input = 128,
+  nz_input = 33
+/
+
+&time_control
+  istart = 1,
+  dt = 0.01,
+  nsteps = 50000,
+  nwrt = 10000
+/
+
+&simulation
+  alpha = 1.0,
+  beta = 0.0,
+  re = 180.0,
+  ta = 0.0,
+  ybar = 1.0,
+  cgstol = 1e-6,
+  cs = 0.1,
+  u00 = 1.0,
+  wavlen = 6.283185307179586,
+  xlen = 6.283185307179586,
+  ylen = 2.0,
+  use_crank_nicolson = .true.
+/
+
+&output
+  iform = 0,
+  iles = 0
+/

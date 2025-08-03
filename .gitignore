@@ -1,0 +1,49 @@
+# Compiled Object files
+*.o
+*.mod
+*.smod
+
+# Executables
+dns_solver
+channel_flow_solver
+openmp_performance_test
+
+# Log files
+*.log
+simulation.log
+
+# Output files
+*.out
+*.dat.bak
+p_*
+
+# Backup files
+*~
+*.bak
+*.swp
+*.tmp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+*.sublime-*
+.vscode/
+.idea/
+
+# Build directories
+build/
+dist/
+
+# Documentation
+docs/_build/
+
+# Temporary files
+temp/
+tmp/
