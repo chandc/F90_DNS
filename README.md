@@ -1,8 +1,29 @@
-# F90_DNS - 3D Navier-Stokes Channel Flow DNS Solver
-
-A high-performance Direct Numerical Simulation (DNS) solver for 3D incompressible Navier-Stokes equations in channel flow geometry, implemented in modern Fortran 90.
+# DNS Channel Flow Solver - Pressure BC Development
 
 ## Overview
+
+This repository contains a modern Fortran 90 implementation of a 3D incompressible Navier-Stokes DNS (Direct Numerical Simulation) solver for channel flow. The code is a complete modernization of the original F77 solver developed by Daniel Chiu-Leung Chan (1993), with enhanced pressure boundary condition treatment using iterative solvers.
+
+## Key Features
+
+### Numerical Methods
+- **Spectral Methods**: Fourier decomposition in streamwise direction
+- **LGL Collocation**: Legendre-Gauss-Lobatto points in wall-normal direction
+- **Time Integration**: Crank-Nicolson for viscous terms, 4th-order Runge-Kutta for convection
+- **Pressure Solver**: CGS iterative method with F77 compatibility
+- **Boundary Conditions**: Kim & Moin approach for viscous wall treatment
+
+### Pressure Equation Innovation
+- **Bottom-wall-only pressure pinning** for zero mode (kₓ=0) stability
+- **Unified matrix construction** for all Fourier modes (F77 approach)
+- **CGS iterative solver** robust to near-singular systems
+- **No artificial Dirichlet conditions** - uses natural boundary conditions
+
+### Grid Configuration
+- **nx = 128**: Fourier modes in streamwise direction
+- **nz = 33**: LGL collocation points in wall-normal direction  
+- **Domain**: x ∈ [0, 2π], z ∈ [-1, +1] (channel half-height = 1)
+- **Reynolds number**: Re = 180 (based on channel half-height)
 
 This DNS solver implements a spectral-spectral method for solving the incompressible Navier-Stokes equations:
 - **Streamwise (x)**: Fourier spectral methods (periodic)

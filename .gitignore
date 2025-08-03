@@ -1,3 +1,13 @@
+# DNS Channel Flow Solver - Git Ignore File
+#
+# This file specifies intentionally untracked files that Git should ignore
+# Excludes F77 files, temporary files, and simulation output
+
+# F77 Files (excluded as requested)
+*.f
+base_code.f
+base_code_*.f
+
 # Compiled Object files
 *.o
 *.mod
@@ -6,16 +16,20 @@
 # Executables
 dns_solver
 channel_flow_solver
+dns_pressure_bc
 openmp_performance_test
 
 # Log files
 *.log
-simulation.log
+simulation*.log
+nohup.out
 
 # Output files
 *.out
+*.dat
 *.dat.bak
 p_*
+plot.dat
 
 # Backup files
 *~

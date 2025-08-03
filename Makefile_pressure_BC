@@ -1,0 +1,242 @@
+# =============================================================================
+#===============================================================================
+#
+# Makefile_pressure_BC - Build System for DNS Pressure BC Development
+#
+# DESCRIPTION:
+#   Specialized makefile for building and running the DNS solver with 
+#   pressure boundary condition development features. This version includes
+#   background monitoring and enhanced error checking.
+#
+# TARGETS:
+#   all        - Compile all modules and main executable
+#   clean      - Remove all object files, modules, and executables
+#   run        - Run simulation in foreground (interactive)
+#   run-bg     - Run simulation in background with logging
+#   stop       - Stop background simulation
+#   monitor    - Monitor background simulation progress
+#   check      - Verify simulation is running
+#
+# BUILD CONFIGURATION:
+#   Compiler:   gfortran with optimization and OpenMP support
+#   Libraries:  FFTW3, LAPACK, BLAS for numerical computations
+#   Modules:    LGL (Legendre-Gauss-Lobatto), FFT (spectral methods)
+#   Standards:  F90 with enhanced error checking and warnings
+#
+# USAGE EXAMPLES:
+#   make -f Makefile_pressure_BC all       # Compile
+#   make -f Makefile_pressure_BC run-bg    # Run in background
+#   make -f Makefile_pressure_BC monitor   # Check progress
+#   make -f Makefile_pressure_BC stop      # Stop simulation
+#
+# AUTHORS:
+#   GitHub Copilot for DNS pressure BC development
+#
+# VERSION: 2025.8.3
+#
+#===============================================================================
+# Based on 3D Navier-Stokes Channel Flow DNS Solver
+# Development version for pressure solver modifications
+# =============================================================================
+
+# Compiler settings
+FC = gfortran
+FFLAGS = -O3 -fdefault-real-8 -fdefault-double-8 -fopenmp -Wall -Wextra
+DEBUG_FFLAGS = -g -O0 -fdefault-real-8 -fdefault-double-8 -fbounds-check -fbacktrace -fopenmp -Wall -Wextra
+
+# FFTW libraries (macOS Homebrew paths)
+FFTW_INCLUDE = -I/opt/homebrew/include
+FFTW_LIBDIR = -L/opt/homebrew/lib
+FFTW_LIBS = $(FFTW_LIBDIR) -lfftw3 -lfftw3_omp -llapack -lblas -lm
+
+# Source files and dependencies for pressure BC version
+LGL_MODULE = lgl_module.f90
+FFT_MODULE = fft_module.f90
+MAIN_SOURCE = DNS_pressure_BC.f90
+
+# Object files
+LGL_OBJ = lgl_module.o
+FFT_OBJ = fft_module.o
+MAIN_OBJ = DNS_pressure_BC.o
+OBJECTS = $(LGL_OBJ) $(FFT_OBJ) $(MAIN_OBJ)
+
+# Executable name
+TARGET = dns_pressure_bc
+
+# Module files (auto-generated)
+MOD_FILES = lgl_module.mod fft_module.mod
+
+# Default target
+all: $(TARGET)
+	@echo "=============================================="
+	@echo "  DNS Pressure BC Solver compiled successfully!"
+	@echo "  Executable: ./$(TARGET)"
+	@echo "  Run with: make -f Makefile_pressure_BC run"
+	@echo "=============================================="
+
+# Build executable (link all objects)
+$(TARGET): $(OBJECTS)
+	$(FC) $(FFLAGS) -o $@ $^ $(FFTW_LIBS)
+
+# Module dependencies and compilation rules
+$(LGL_OBJ): $(LGL_MODULE)
+	$(FC) $(FFLAGS) $(FFTW_INCLUDE) -c $<
+
+$(FFT_OBJ): $(FFT_MODULE)
+	$(FC) $(FFLAGS) $(FFTW_INCLUDE) -c $<
+
+$(MAIN_OBJ): $(MAIN_SOURCE) $(LGL_OBJ) $(FFT_OBJ)
+	$(FC) $(FFLAGS) $(FFTW_INCLUDE) -c $<
+
+# =============================================================================
+# Run targets for pressure BC development
+# =============================================================================
+
+run: $(TARGET)
+	@echo "Running DNS Pressure BC solver..."
+	./$(TARGET)
+
+run-bg: $(TARGET)
+	@echo "Starting DNS Pressure BC solver in background..."
+	nohup ./$(TARGET) > simulation_pressure_bc.log 2>&1 &
+	@echo "Background process started. Check simulation_pressure_bc.log for output."
+	@echo "Use 'make -f Makefile_pressure_BC monitor' to track progress."
+
+monitor:
+	@echo "=== DNS Pressure BC Simulation Monitor ==="
+	@while true; do \
+		if [ -f simulation_pressure_bc.log ]; then \
+			echo "=== Latest simulation output ==="; \
+			tail -n 10 simulation_pressure_bc.log; \
+		else \
+			echo "No simulation log found."; \
+		fi; \
+		echo "=== Process status ==="; \
+		if pgrep -f dns_pressure_bc > /dev/null; then \
+			echo "✓ DNS Pressure BC solver is running"; \
+		else \
+			echo "✗ DNS Pressure BC solver is not running"; \
+		fi; \
+		echo "=== $(date) ==="; \
+		echo "Press Ctrl+C to stop monitoring..."; \
+		sleep 30; \
+	done
+
+status:
+	@echo "=== DNS Pressure BC Status ==="
+	@if pgrep -f dns_pressure_bc > /dev/null; then \
+		echo "✓ DNS Pressure BC solver is running"; \
+		echo "PID: $$(pgrep -f dns_pressure_bc)"; \
+	else \
+		echo "✗ DNS Pressure BC solver is not running"; \
+	fi
+	@if [ -f simulation_pressure_bc.log ]; then \
+		echo "Log file size: $$(wc -c < simulation_pressure_bc.log) bytes"; \
+		echo "Latest log entries:"; \
+		tail -n 5 simulation_pressure_bc.log; \
+	else \
+		echo "No simulation log found."; \
+	fi
+
+stop:
+	@echo "Stopping DNS Pressure BC solver..."
+	@if pgrep -f dns_pressure_bc > /dev/null; then \
+		pkill -f dns_pressure_bc; \
+		echo "DNS Pressure BC solver stopped."; \
+	else \
+		echo "No DNS Pressure BC solver process found."; \
+	fi
+
+# =============================================================================
+# OpenMP parallel execution targets
+# =============================================================================
+
+run-omp2: $(TARGET)
+	@echo "Running with 2 OpenMP threads..."
+	OMP_NUM_THREADS=2 ./$(TARGET)
+
+run-omp4: $(TARGET)
+	@echo "Running with 4 OpenMP threads..."
+	OMP_NUM_THREADS=4 ./$(TARGET)
+
+run-omp8: $(TARGET)
+	@echo "Running with 8 OpenMP threads..."
+	OMP_NUM_THREADS=8 ./$(TARGET)
+
+# =============================================================================
+# Development and debugging targets
+# =============================================================================
+
+debug: FFLAGS = $(DEBUG_FFLAGS)
+debug: clean $(TARGET)
+	@echo "Debug version compiled. Use gdb ./$(TARGET) to debug."
+
+test: $(TARGET)
+	@echo "Testing compilation..."
+	@if [ -x "./$(TARGET)" ]; then \
+		echo "✓ Executable created successfully"; \
+		echo "Size: $$(ls -lh ./$(TARGET) | awk '{print $$5}')"; \
+	else \
+		echo "✗ Compilation failed"; \
+		exit 1; \
+	fi
+
+check-deps:
+	@echo "Checking dependencies..."
+	@which $(FC) > /dev/null || (echo "✗ gfortran not found" && exit 1)
+	@echo "✓ Fortran compiler: $(FC)"
+	@pkg-config --exists fftw3 && echo "✓ FFTW3 found" || echo "⚠ FFTW3 not found via pkg-config"
+	@[ -f /opt/homebrew/lib/libfftw3.dylib ] && echo "✓ FFTW3 library found" || echo "⚠ FFTW3 library not found"
+
+# =============================================================================
+# Cleanup targets
+# =============================================================================
+
+clean:
+	rm -f $(OBJECTS) $(MOD_FILES) $(TARGET)
+	@echo "Cleaned up object files, modules, and executable"
+
+clean-logs:
+	rm -f simulation_pressure_bc.log nohup.out
+	@echo "Cleaned up log files"
+
+clean-all: clean clean-logs
+	@echo "Complete cleanup finished"
+
+# =============================================================================
+# Help and information
+# =============================================================================
+
+help:
+	@echo "DNS Pressure BC Solver - Available Make Targets:"
+	@echo ""
+	@echo "Building:"
+	@echo "  all       - Compile the pressure BC solver (default)"
+	@echo "  debug     - Compile with debug flags"
+	@echo "  test      - Test compilation"
+	@echo "  clean     - Remove object files and executable"
+	@echo ""
+	@echo "Running:"
+	@echo "  run       - Interactive execution"
+	@echo "  run-bg    - Background execution with logging"
+	@echo "  monitor   - Monitor background simulation (30s intervals)"
+	@echo "  status    - Check simulation status"
+	@echo "  stop      - Stop background simulation"
+	@echo ""
+	@echo "Parallel:"
+	@echo "  run-omp2  - Run with 2 OpenMP threads"
+	@echo "  run-omp4  - Run with 4 OpenMP threads"
+	@echo "  run-omp8  - Run with 8 OpenMP threads"
+	@echo ""
+	@echo "Development:"
+	@echo "  check-deps - Verify dependencies"
+	@echo "  help       - Show this help"
+	@echo ""
+	@echo "Usage examples:"
+	@echo "  make -f Makefile_pressure_BC all"
+	@echo "  make -f Makefile_pressure_BC run"
+	@echo "  make -f Makefile_pressure_BC run-bg"
+	@echo "  make -f Makefile_pressure_BC monitor"
+
+# Prevent make from treating targets as files
+.PHONY: all run run-bg monitor status stop run-omp2 run-omp4 run-omp8 debug test check-deps clean clean-logs clean-all help
