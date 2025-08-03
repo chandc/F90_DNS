@@ -146,7 +146,7 @@ F90_DNS/
 - **Periodicity**: Streamwise and spanwise directions
 
 ### Spectral Methods
-- **LGL Collocation**: Chebyshev-Gauss-Lobatto points for wall-normal direction
+- **LGL Collocation**: Legendre-Gauss-Lobatto points for wall-normal direction
 - **Fourier Transform**: FFTW3 for periodic directions
 - **Matrix-free**: Efficient spectral differentiation operators
 
