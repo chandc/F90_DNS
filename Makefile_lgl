@@ -1,0 +1,116 @@
+# =============================================================================
+# Makefile for LGL-Enhanced Poisson Solver with FFTW3
+# =============================================================================
+
+# Compiler settings
+FC = gfortran
+FCFLAGS = -fopenmp -O3 -Wall -fbacktrace -g -fdefault-real-8 -fdefault-double-8
+
+# Check for FFTW3 installation
+FFTW_LIBS = -lfftw3 -lfftw3_threads -lm
+FFTW_INCLUDE = -I/opt/homebrew/opt/fftw/include
+FFTW_LIBDIR = -L/opt/homebrew/opt/fftw/lib
+
+# Math libraries
+MATH_LIBS = -llapack -lblas
+
+# Optimization flags
+OPT_FLAGS = -march=native -funroll-loops
+
+# Target executables
+TARGET_ORIGINAL = poisson_3d_optimized
+TARGET_LGL = poisson_3d_lgl_optimized
+TARGET_CONVERGENCE = poisson_3d_convergence_study
+
+# Source files
+SOURCES_ORIGINAL = fft_module.f90 poisson_3d_solver.f90
+SOURCES_LGL = fft_module.f90 lgl_module.f90 poisson_3d_lgl_solver.f90
+SOURCES_CONVERGENCE = fft_module.f90 lgl_module.f90 poisson_3d_convergence_study.f90
+
+# Object files
+OBJECTS_ORIGINAL = $(SOURCES_ORIGINAL:.f90=.o)
+OBJECTS_LGL = $(SOURCES_LGL:.f90=.o)
+OBJECTS_CONVERGENCE = $(SOURCES_CONVERGENCE:.f90=.o)
+
+# Default target
+all: check-fftw $(TARGET_ORIGINAL) $(TARGET_LGL) $(TARGET_CONVERGENCE)
+
+# Check for FFTW3
+check-fftw:
+	@echo "Checking for FFTW3..."
+	@if [ -f /opt/homebrew/lib/libfftw3.dylib ]; then \
+		echo "✅ FFTW3 found in /opt/homebrew/lib"; \
+	elif [ -f /usr/local/lib/libfftw3.so ]; then \
+		echo "✅ FFTW3 found in /usr/local/lib"; \
+	else \
+		echo "❌ FFTW3 not found. Please install with: brew install fftw"; \
+		exit 1; \
+	fi
+
+# Original solver
+$(TARGET_ORIGINAL): $(OBJECTS_ORIGINAL)
+	$(FC) $(FCFLAGS) $(OPT_FLAGS) -o $@ $^ $(MATH_LIBS) $(FFTW_LIBS) $(FFTW_LIBDIR)
+	@echo "✅ Successfully built original Poisson solver with FFTW3!"
+
+# LGL-enhanced solver
+$(TARGET_LGL): lgl_module.o fft_module.o poisson_3d_lgl_solver.o
+	$(FC) $(FCFLAGS) $(OPT_FLAGS) -o $@ $^ $(MATH_LIBS) $(FFTW_LIBS) $(FFTW_LIBDIR)
+	@echo "✅ Successfully built LGL-enhanced Poisson solver!"
+
+# Convergence study program
+$(TARGET_CONVERGENCE): lgl_module.o fft_module.o poisson_3d_convergence_study.o
+	$(FC) $(FCFLAGS) $(OPT_FLAGS) -o $@ $^ $(MATH_LIBS) $(FFTW_LIBS) $(FFTW_LIBDIR)
+	@echo "✅ Successfully built convergence study program!"
+
+# Compilation rules
+%.o: %.f90
+	$(FC) $(FCFLAGS) $(FFTW_INCLUDE) -c $<
+
+# Module dependencies
+poisson_3d_solver.o: fft_module.o
+poisson_3d_lgl_solver.o: fft_module.o lgl_module.o
+poisson_3d_convergence_study.o: fft_module.o lgl_module.o
+
+# Test targets
+test-original: $(TARGET_ORIGINAL)
+	@echo "Testing original solver..."
+	@echo -e "4\n0" | ./$(TARGET_ORIGINAL)
+
+test-lgl: $(TARGET_LGL)
+	@echo "Testing LGL solver..."
+	@echo -e "5\n0" | ./$(TARGET_LGL)
+
+test-all: test-original test-lgl
+	@echo "All tests completed!"
+
+# Performance comparison
+benchmark: $(TARGET_ORIGINAL) $(TARGET_LGL)
+	@echo "=== PERFORMANCE BENCHMARK ==="
+	@echo "Original solver (Simple Demo):"
+	@echo "4" | ./$(TARGET_ORIGINAL) | grep -E "(FFT time|Solve time|Max error)"
+	@echo ""
+	@echo "LGL solver (Demo):"
+	@echo "5" | ./$(TARGET_LGL) | grep -E "(solve time|Max error)"
+
+# Clean up
+clean:
+	rm -f $(TARGET_ORIGINAL) $(TARGET_LGL) $(TARGET_CONVERGENCE) *.o *.mod
+
+# Clean and rebuild everything
+rebuild: clean all
+
+# Help
+help:
+	@echo "Available targets:"
+	@echo "  all           - Build all programs"
+	@echo "  original      - Build original solver only"  
+	@echo "  lgl          - Build LGL-enhanced solver only"
+	@echo "  convergence   - Build convergence study only"
+	@echo "  test-original - Test original solver"
+	@echo "  test-lgl     - Test LGL solver"
+	@echo "  benchmark    - Performance comparison"
+	@echo "  clean        - Remove built files"
+	@echo "  rebuild      - Clean and rebuild"
+	@echo "  help         - Show this help"
+
+.PHONY: all check-fftw test-original test-lgl test-all benchmark clean rebuild help

@@ -1,0 +1,129 @@
+# Makefile for Optimized Poisson Solver with FFTW3
+FC = gfortran
+FFLAGS = -fopenmp -O3 -Wall -fbacktrace -g
+FFLAGS_FAST = -fopenmp -O3 -march=native -funroll-loops
+LIBS = -llapack -lblas -lfftw3 -lfftw3_threads -lm
+
+# Check if FFTW is installed via Homebrew
+FFTW_PREFIX = $(shell brew --prefix fftw 2>/dev/null)
+ifneq ($(FFTW_PREFIX),)
+    FFLAGS += -I$(FFTW_PREFIX)/include
+    LIBS += -L$(FFTW_PREFIX)/lib
+endif
+
+# Source files
+MODULE_SRC = fft_module.f90
+MAIN_SRC = poisson_3d_solver.f90
+TEST_SRC = test_fftw.f90
+POISSON_TEST_SRC = test_poisson_fftw.f90
+
+# Object files
+MODULE_OBJ = $(MODULE_SRC:.f90=.o)
+MAIN_OBJ = $(MAIN_SRC:.f90=.o)
+TEST_OBJ = $(TEST_SRC:.f90=.o)
+POISSON_TEST_OBJ = $(POISSON_TEST_SRC:.f90=.o)
+
+# Target executables
+TARGET = poisson_3d_optimized
+TEST_TARGET = test_fftw
+POISSON_TEST_TARGET = test_poisson_fftw
+
+# Default target
+all: check_fftw $(TARGET)
+
+# Check if FFTW is available
+check_fftw:
+	@echo "Checking for FFTW3..."
+	@if [ -f "/opt/homebrew/lib/libfftw3.dylib" ]; then \
+		echo "✅ FFTW3 found in /opt/homebrew/lib"; \
+	else \
+		echo "❌ FFTW3 not found. Install with: brew install fftw"; \
+		exit 1; \
+	fi
+
+# Build the executable with optimized flags
+$(TARGET): $(MODULE_OBJ) $(MAIN_OBJ)
+	$(FC) $(FFLAGS_FAST) -o $@ $^ $(LIBS)
+	@echo "✅ Successfully built optimized Poisson solver with FFTW3!"
+
+# Build test executable
+$(TEST_TARGET): $(MODULE_OBJ) $(TEST_OBJ)
+	$(FC) $(FFLAGS) -o $@ $^ $(LIBS)
+	@echo "✅ Successfully built FFTW3 test program!"
+
+# Build Poisson test executable
+$(POISSON_TEST_TARGET): $(MODULE_OBJ) $(POISSON_TEST_OBJ)
+	$(FC) $(FFLAGS) -o $@ $^ $(LIBS)
+	@echo "✅ Successfully built Poisson-FFTW3 integration test!"
+
+# Compile modules
+poisson_3d_module.o: poisson_3d_module.f90
+	$(FC) $(FFLAGS) -c $<
+
+fft_module.o: fft_module.f90
+	$(FC) $(FFLAGS) -c $<
+
+# Compile main program (depends on modules)
+$(MAIN_OBJ): $(MAIN_SRC) $(MODULE_OBJ)
+	$(FC) $(FFLAGS) -c $<
+
+# Compile test program (depends on modules)  
+$(TEST_OBJ): $(TEST_SRC) $(MODULE_OBJ)
+	$(FC) $(FFLAGS) -c $<
+
+# Compile Poisson test program (depends on modules)  
+$(POISSON_TEST_OBJ): $(POISSON_TEST_SRC) $(MODULE_OBJ)
+	$(FC) $(FFLAGS) -c $<
+
+# Test FFTW installation
+test: $(TEST_TARGET)
+	@echo "Running FFTW3 integration test..."
+	./$(TEST_TARGET)
+
+# Test Poisson-FFTW integration
+test-poisson: $(POISSON_TEST_TARGET)
+	@echo "Running Poisson-FFTW3 integration test..."
+	./$(POISSON_TEST_TARGET)
+
+# Run the optimized program
+run: $(TARGET)
+	@echo "Running optimized Poisson solver..."
+	./$(TARGET)
+	./$(TARGET)
+
+# Performance test
+benchmark: $(TARGET)
+	@echo "Running performance benchmark..."
+	time ./$(TARGET)
+
+# Install FFTW (macOS with Homebrew)
+install_fftw:
+	@echo "Installing FFTW3 with Homebrew..."
+	brew install fftw
+	@echo "FFTW3 installation complete"
+
+# Clean up
+clean:
+	rm -f $(TARGET) *.o *.mod
+
+# Debug version
+debug: FFLAGS += -DDEBUG -fbounds-check -fcheck=all
+debug: $(TARGET)
+
+# Help
+help:
+	@echo "Available targets:"
+	@echo "  all          - Build the optimized Poisson solver"
+	@echo "  run          - Build and run the solver"
+	@echo "  benchmark    - Run performance benchmark"
+	@echo "  install_fftw - Install FFTW3 using Homebrew"
+	@echo "  debug        - Build debug version"
+	@echo "  clean        - Remove executable and object files"
+	@echo "  help         - Show this help message"
+	@echo ""
+	@echo "Requirements:"
+	@echo "  - FFTW3 library (install with: brew install fftw)"
+	@echo "  - LAPACK/BLAS libraries"
+	@echo "  - OpenMP support in gfortran"
+
+.PHONY: all run benchmark install_fftw clean debug help check_fftw

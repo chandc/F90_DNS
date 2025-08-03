@@ -1,0 +1,60 @@
+# =============================================================================
+# Makefile for Minimal Channel Flow Solver (F90) - No External Dependencies
+# =============================================================================
+
+# Compiler and flags
+FC = gfortran
+FFLAGS = -O3 -fdefault-real-8 -fdefault-double-8 -Wall -Wextra
+LDFLAGS = -lm
+
+# Source files
+SOURCES = lgl_module.f90 channel_flow_minimal.f90
+OBJECTS = $(SOURCES:.f90=.o)
+TARGET = channel_flow_minimal
+
+# Module dependencies
+channel_flow_minimal.o: lgl_module.o
+
+# Default target
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(FC) $(FFLAGS) -o $@ $^ $(LDFLAGS)
+
+%.o: %.f90
+	$(FC) $(FFLAGS) -c $<
+
+clean:
+	rm -f *.o *.mod $(TARGET) *.dat
+
+# Create sample input file
+input.dat:
+	@echo "Creating sample input.dat..."
+	@echo "&inputs" > input.dat
+	@echo " istart=0, dt=0.01, nsteps=20, nwrt=5, iform=0, iles=0" >> input.dat
+	@echo "/" >> input.dat
+	@echo "&params" >> input.dat
+	@echo " xlen=6.28318, ylen=1.0, re=180.0, ta=0.0, ybar=1.0," >> input.dat
+	@echo " cgstol=1.0e-4, cs=0.1, u00=0.0, wavlen=1.0" >> input.dat
+	@echo "/" >> input.dat
+
+# Test compilation and run
+test: $(TARGET) input.dat
+	@echo "Testing F77 to F90 conversion..."
+	@echo "Running minimal channel flow solver..."
+	./$(TARGET)
+	@echo ""
+	@echo "Checking output files..."
+	@ls -la *.dat 2>/dev/null || echo "No output files found"
+
+# Demo run with detailed output
+demo: $(TARGET) input.dat
+	@echo "============================================"
+	@echo "  F77 to F90 Conversion Demonstration"
+	@echo "============================================"
+	./$(TARGET)
+	@echo ""
+	@echo "Generated files:"
+	@ls -la *.dat 2>/dev/null || echo "No data files created"
+
+.PHONY: all clean test demo

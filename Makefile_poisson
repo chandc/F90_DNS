@@ -1,0 +1,53 @@
+# Makefile for 3D Poisson Solver
+FC = gfortran
+FFLAGS = -fopenmp -O3 -Wall -fbacktrace -g
+LIBS = -llapack -lblas
+
+# Source files
+MODULE_SRC = poisson_3d_module.f90
+MAIN_SRC = poisson_3d_solver.f90
+
+# Object files
+MODULE_OBJ = $(MODULE_SRC:.f90=.o)
+MAIN_OBJ = $(MAIN_SRC:.f90=.o)
+
+# Target executable
+TARGET = poisson_3d_solver
+
+# Default target
+all: $(TARGET)
+
+# Build the executable
+$(TARGET): $(MODULE_OBJ) $(MAIN_OBJ)
+	$(FC) $(FFLAGS) -o $@ $^ $(LIBS)
+
+# Compile module
+$(MODULE_OBJ): $(MODULE_SRC)
+	$(FC) $(FFLAGS) -c $<
+
+# Compile main program (depends on module)
+$(MAIN_OBJ): $(MAIN_SRC) $(MODULE_OBJ)
+	$(FC) $(FFLAGS) -c $<
+
+# Run the program
+run: $(TARGET)
+	./$(TARGET)
+
+# Clean up
+clean:
+	rm -f $(TARGET) *.o *.mod
+
+# Debug version
+debug: FFLAGS += -DDEBUG -fbounds-check -fcheck=all
+debug: $(TARGET)
+
+# Help
+help:
+	@echo "Available targets:"
+	@echo "  all     - Build the Poisson solver"
+	@echo "  run     - Build and run the solver"
+	@echo "  debug   - Build debug version with bounds checking"
+	@echo "  clean   - Remove executable and object files"
+	@echo "  help    - Show this help message"
+
+.PHONY: all run clean debug help
