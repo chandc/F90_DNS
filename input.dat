@@ -1,3 +1,31 @@
+!===============================================================================
+! INPUT.DAT - DNS Channel Flow Solver Configuration
+!
+! DESCRIPTION:
+!   Namelist-based input file for the 3D incompressible Navier-Stokes solver.
+!   Controls grid parameters, time integration, physical properties, and output.
+!
+! GRID SECTION:
+!   nx_input: Number of Fourier modes in streamwise direction (128)
+!   nz_input: Number of LGL points in wall-normal direction (33)
+!
+! TIME CONTROL:
+!   istart:   0=new simulation, 1=restart from run.dat
+!   dt:       Time step size (0.01 recommended for stability)
+!   nsteps:   Number of time steps to run
+!   nwrt:     Output frequency (steps between plot file writes)
+!
+! SIMULATION PARAMETERS:
+!   alpha:    Streamwise wavelength parameter (1.0 = fundamental mode)
+!   beta:     Spanwise wavelength parameter (0.0 = 2D simulation)
+!   re:       Reynolds number based on channel half-height (180.0)
+!   ybar:     Channel half-height (1.0)
+!   cgstol:   CGS solver tolerance for pressure equation (1e-6)
+!
+! AUTHORS: DNS development team
+! VERSION: 2025.8.3
+!===============================================================================
+
 &grid
   nx_input = 128,
   nz_input = 33
@@ -6,7 +34,7 @@
 &time_control
   istart = 1,
   dt = 0.01,
-  nsteps = 50000,
+  nsteps = 10000,
   nwrt = 10000
 /
 

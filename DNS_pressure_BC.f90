@@ -1140,10 +1140,10 @@ contains
     subroutine solve_viscous_step(p)
         implicit none
         type(navier_stokes_params), intent(inout) :: p
-        integer :: ix, i, j, info
+        integer :: ix, i, j, k, info
         real(wp) :: lambda_x, visc_factor
         real(wp) :: matrix(nz,nz), rhs_matrix(nz,nz)
-        real(wp) :: rhs_vec(nz)
+        real(wp) :: rhs_vec(nz), rhs_bc_contrib(nz)
         integer :: ipiv(nz)
         real(wp) :: rhs_u(nxhp,nz), rhs_w(nxhp,nz)
         real(wp) :: u_spec(nxhp,nz), w_spec(nxhp,nz)
@@ -1180,6 +1180,7 @@ contains
             lambda_x = p%xsq(ix)
             
             ! Build Helmholtz matrix: I - visc_factor * (D²/dy² - λₓ² I)
+            ! Following base_code.f pattern: build full matrix first, then handle boundaries
             matrix = 0.0_wp
             
             ! Add identity matrix
@@ -1187,23 +1188,25 @@ contains
                 matrix(j,j) = 1.0_wp
             end do
             
-            ! Add viscous terms: -visc_factor * (D²/dy² - λₓ² I)
+            ! Add viscous terms: -visc_factor * D²/dy² (for ALL points, like base code)
             do i = 1, nz
                 do j = 1, nz
-                    if (i <= nzm .and. j <= nzm) then
-                        ! Second derivative matrix (multiplied by -visc_factor)
-                        matrix(i,j) = matrix(i,j) - visc_factor * &
-                                      compute_second_derivative_element(p, i-1, j-1)
-                    endif
+                    ! Second derivative matrix (multiplied by -visc_factor)
+                    matrix(i,j) = matrix(i,j) - visc_factor * &
+                                  compute_second_derivative_element(p, i-1, j-1)
                 end do
                 
                 ! Add visc_factor*λₓ² term to diagonal
-                if (i <= nzm) then
-                    matrix(i,i) = matrix(i,i) + visc_factor * lambda_x
-                endif
+                matrix(i,i) = matrix(i,i) + visc_factor * lambda_x
             end do
             
-            ! Apply boundary conditions
+            ! Compute boundary contributions (like base code furxy calculation)
+            rhs_bc_contrib = 0.0_wp
+            do k = 1, nz
+                rhs_bc_contrib(k) = matrix(k,1) * p%uw1(2*ix-1) + matrix(k,nz) * p%uw2(2*ix-1)
+            end do
+            
+            ! Apply boundary conditions (zero out boundary rows/columns)
             matrix(1,:) = 0.0_wp
             matrix(1,1) = 1.0_wp
             matrix(nz,:) = 0.0_wp
@@ -1218,18 +1221,12 @@ contains
                 rhs_vec = u_spec(ix,:) + rhs_u(ix,:)
             endif
             
-            ! Apply Kim & Moin extrapolated boundary conditions for u-velocity
-            ! Convert from Fourier mode index to boundary array index
-            if (ix == 1) then
-                ! DC mode (k=0): use real parts only
-                rhs_vec(1) = p%uw1(1)   ! Bottom wall
-                rhs_vec(nz) = p%uw2(1)  ! Top wall
-            else
-                ! Non-zero modes: use complex boundary values
-                ! Real part: even index, Imaginary part: odd index
-                rhs_vec(1) = p%uw1(2*ix-1)   ! Bottom wall
-                rhs_vec(nz) = p%uw2(2*ix-1)  ! Top wall
-            endif
+            ! Subtract boundary contributions (like base code: fur(k) = su(ik)*... - furxy(k))
+            rhs_vec = rhs_vec - rhs_bc_contrib
+            
+            ! Apply Kim & Moin extrapolated boundary conditions for u-velocity (all Fourier modes)
+            rhs_vec(1) = p%uw1(2*ix-1)   ! Bottom wall
+            rhs_vec(nz) = p%uw2(2*ix-1)  ! Top wall
             
             call dgesv(nz, 1, matrix, nz, ipiv, rhs_vec, nz, info)
             if (info /= 0) then
@@ -1246,17 +1243,17 @@ contains
                 rhs_vec = w_spec(ix,:) + rhs_w(ix,:)
             endif
             
-            ! Apply Kim & Moin extrapolated boundary conditions for w-velocity
-            ! (w remains zero at walls for no-penetration, but use consistent indexing)
-            if (ix == 1) then
-                ! DC mode (k=0): use real parts only
-                rhs_vec(1) = p%ww1(1)   ! Bottom wall
-                rhs_vec(nz) = p%ww2(1)  ! Top wall
-            else
-                ! Non-zero modes: use complex boundary values
-                rhs_vec(1) = p%ww1(2*ix-1)   ! Bottom wall
-                rhs_vec(nz) = p%ww2(2*ix-1)  ! Top wall
-            endif
+            ! Compute boundary contributions for w-momentum
+            do k = 1, nz
+                rhs_bc_contrib(k) = matrix(k,1) * p%ww1(2*ix-1) + matrix(k,nz) * p%ww2(2*ix-1)
+            end do
+            
+            ! Subtract boundary contributions
+            rhs_vec = rhs_vec - rhs_bc_contrib
+            
+            ! Apply Kim & Moin extrapolated boundary conditions for w-velocity (all Fourier modes)
+            rhs_vec(1) = p%ww1(2*ix-1)   ! Bottom wall
+            rhs_vec(nz) = p%ww2(2*ix-1)  ! Top wall
             
             call dgesv(nz, 1, matrix, nz, ipiv, rhs_vec, nz, info)
             if (info /= 0) then
@@ -1300,27 +1297,36 @@ contains
         end do
         
         ! Add explicit CN viscous terms: +visc_factor*(D²/dy² - λₓ²)
+        ! Following base code pattern: build full matrix first
         do i = 1, nz
             do j = 1, nz
-                if (i <= nzm .and. j <= nzm) then
-                    rhs_matrix(i,j) = rhs_matrix(i,j) + visc_factor * &
-                                      compute_second_derivative_element(p, i-1, j-1)
-                endif
+                rhs_matrix(i,j) = rhs_matrix(i,j) + visc_factor * &
+                                  compute_second_derivative_element(p, i-1, j-1)
             end do
             
             ! Subtract visc_factor*λₓ² term from diagonal
-            if (i <= nzm) then
-                rhs_matrix(i,i) = rhs_matrix(i,i) - visc_factor * lambda_x
-            endif
+            rhs_matrix(i,i) = rhs_matrix(i,i) - visc_factor * lambda_x
         end do
+        
+        ! Set boundary rows to identity (will be overridden by Kim & Moin BCs)
+        rhs_matrix(1,:) = 0.0_wp
+        rhs_matrix(1,1) = 1.0_wp
+        rhs_matrix(nz,:) = 0.0_wp  
+        rhs_matrix(nz,nz) = 1.0_wp
         
         ! Compute RHS = RHS_matrix * u_current + source_terms
         rhs_out = 0.0_wp
         do i = 1, nz
-            do j = 1, nz
-                rhs_out(i) = rhs_out(i) + rhs_matrix(i,j) * u_current(j)
-            end do
-            rhs_out(i) = rhs_out(i) + source_terms(i)
+            if (i <= nzm) then
+                ! Interior points: full matrix-vector multiplication
+                do j = 1, nz
+                    rhs_out(i) = rhs_out(i) + rhs_matrix(i,j) * u_current(j)
+                end do
+                rhs_out(i) = rhs_out(i) + source_terms(i)
+            else
+                ! Boundary points: will be overridden by Kim & Moin values
+                rhs_out(i) = 0.0_wp
+            endif
         end do
         
     end subroutine build_cn_rhs
