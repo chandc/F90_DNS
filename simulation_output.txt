@@ -1,0 +1,149 @@
+ ============================================
+   3D Navier-Stokes Channel Flow Solver
+   Complete F90 Conversion
+   Originally by Daniel Chiu-Leung Chan, 1993
+ ============================================
+ Reading parameters from input.dat...
+ Grid parameters set: nx=128, nz=33
+ Derived: nxpp=130, nxh=64, nxhp=65, nxf=193
+ Successfully read namelist parameters:
+   Grid: nx=128, nz=33
+   Time control: istart=1, dt=.0100, nsteps=50, nwrt=25
+   Physical: Re=180.0, alpha=1.0000
+   Viscous method: Crank-Nicolson (2nd order)
+   Output: iform=0, iles=0
+FFT plans created for 128 x 33 grid
+ FFT arrays and FFTW plans initialized
+FFTW initialized with 4 threads
+ alpha =   1.000000
+ u00/vel ratio =    0.000
+ Wavelength =    1.000
+ Grid and matrices initialized
+ Checking initial divergence...
+ Initial max divergence:   0.0000E+00
+ Initial RMS divergence:   0.0000E+00
+ Initial condition is already divergence-free!
+ Using laminar channel flow profile with pressure gradient driving
+ Flow fields initialized (laminar parabolic profile)
+ Restarting from start.dat...
+ Restart successful, t =   8.0000E+02
+  Re =    180.0, dt =  0.01000
+  Running 50 time steps
+ ============================================
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0001E+02, u_max= 9.001E+01, u_rms= 5.426E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0002E+02, u_max= 9.001E+01, u_rms= 5.427E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0003E+02, u_max= 9.002E+01, u_rms= 5.428E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0004E+02, u_max= 9.003E+01, u_rms= 5.428E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0005E+02, u_max= 9.004E+01, u_rms= 5.429E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0006E+02, u_max= 9.004E+01, u_rms= 5.429E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0007E+02, u_max= 9.005E+01, u_rms= 5.430E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0008E+02, u_max= 9.006E+01, u_rms= 5.431E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0009E+02, u_max= 9.007E+01, u_rms= 5.431E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0010E+02, u_max= 9.007E+01, u_rms= 5.432E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0011E+02, u_max= 9.008E+01, u_rms= 5.432E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0012E+02, u_max= 9.009E+01, u_rms= 5.433E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0013E+02, u_max= 9.010E+01, u_rms= 5.434E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0014E+02, u_max= 9.010E+01, u_rms= 5.434E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0015E+02, u_max= 9.011E+01, u_rms= 5.435E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0016E+02, u_max= 9.012E+01, u_rms= 5.435E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0017E+02, u_max= 9.013E+01, u_rms= 5.436E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0018E+02, u_max= 9.013E+01, u_rms= 5.437E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0019E+02, u_max= 9.014E+01, u_rms= 5.437E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0020E+02, u_max= 9.015E+01, u_rms= 5.438E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0021E+02, u_max= 9.016E+01, u_rms= 5.438E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0022E+02, u_max= 9.016E+01, u_rms= 5.439E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0023E+02, u_max= 9.017E+01, u_rms= 5.440E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0024E+02, u_max= 9.018E+01, u_rms= 5.440E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0025E+02, u_max= 9.019E+01, u_rms= 5.441E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Output written to: p_8.0025E+02
+ Timing: step= 6.97800ms, avg= 7.30920ms, remaining=     0.0min
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0026E+02, u_max= 9.019E+01, u_rms= 5.441E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0027E+02, u_max= 9.020E+01, u_rms= 5.442E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0028E+02, u_max= 9.021E+01, u_rms= 5.443E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0029E+02, u_max= 9.022E+01, u_rms= 5.443E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0030E+02, u_max= 9.022E+01, u_rms= 5.444E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0031E+02, u_max= 9.023E+01, u_rms= 5.444E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0032E+02, u_max= 9.024E+01, u_rms= 5.445E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0033E+02, u_max= 9.025E+01, u_rms= 5.446E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0034E+02, u_max= 9.025E+01, u_rms= 5.446E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0035E+02, u_max= 9.026E+01, u_rms= 5.447E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0036E+02, u_max= 9.027E+01, u_rms= 5.447E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0037E+02, u_max= 9.028E+01, u_rms= 5.448E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0038E+02, u_max= 9.028E+01, u_rms= 5.449E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0039E+02, u_max= 9.029E+01, u_rms= 5.449E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0040E+02, u_max= 9.030E+01, u_rms= 5.450E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0041E+02, u_max= 9.031E+01, u_rms= 5.450E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0042E+02, u_max= 9.031E+01, u_rms= 5.451E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0043E+02, u_max= 9.032E+01, u_rms= 5.452E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0044E+02, u_max= 9.033E+01, u_rms= 5.452E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0045E+02, u_max= 9.034E+01, u_rms= 5.453E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0046E+02, u_max= 9.034E+01, u_rms= 5.453E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0047E+02, u_max= 9.035E+01, u_rms= 5.454E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0048E+02, u_max= 9.036E+01, u_rms= 5.455E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0049E+02, u_max= 9.037E+01, u_rms= 5.455E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Using Crank-Nicolson viscous step with Kim & Moin boundary conditions
+ Time =   8.0050E+02, u_max= 9.037E+01, u_rms= 5.456E+01, w_max= 0.000E+00, w_rms= 0.000E+00, div_max= 0.000E+00, div_rms= 0.000E+00
+ Output written to: p_8.0050E+02
+ Timing: step= 7.07300ms, avg= 7.25690ms, remaining=     0.0min
+ ============================================
+ Timing Summary for 50 time steps:
+ Average time per step:    7.257 ms
+ Total computation time:      0.4 seconds
+ Total computation time:      0.0 minutes
+ Time steps per second:  137.800 steps/s
+ ============================================
+ Final output completed
+ Files written: run.dat, plot.dat
+ Memory cleanup and FFTW cleanup completed
+ ============================================
+   F90 Conversion Completed Successfully!
+ ============================================
