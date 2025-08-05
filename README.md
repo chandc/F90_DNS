@@ -235,7 +235,7 @@ Kim, J., & Moin, P. (1985). *Application of a fractional-step method to incompre
 
 ## Performance Characteristics
 
-### Typical Performance (MacBook Pro M1)
+### Typical Performance (MacBook Pro M3 Max)
 - **Grid**: 128×33×64 (streamwise×wall-normal×spanwise)
 - **Speed**: ~2-3 time units per wall-clock second
 - **Memory**: ~50-100 MB RAM usage
