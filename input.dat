@@ -4,10 +4,10 @@
 /
 
 &time_control
-  istart = 1,
+  istart = 0,
   dt = 0.01,
-  nsteps = 50,
-  nwrt = 25
+  nsteps = 60000,
+  nwrt = 100000000
 /
 
 &simulation
@@ -28,4 +28,12 @@
 &output
   iform = 0,
   iles = 0
+/
+
+&flow_control
+  flow_control_method = 2,
+  target_pressure_gradient = 0.0166666,
+  target_bulk_velocity = 1.0,
+  controller_gain = 0.15,
+  controller_update_freq = 7
 /

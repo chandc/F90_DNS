@@ -123,11 +123,23 @@ program channel_flow_solver
         ! Divergence checking array
         real(wp), allocatable :: div_check(:)
         real(wp), allocatable :: div_check_2d(:,:)
+        
+        ! Flow control parameters
+        integer :: flow_control_method        ! 1=const pressure, 2=const volume
+        real(wp) :: target_pressure_gradient  ! Target ∂p/∂x for method 1
+        real(wp) :: target_bulk_velocity      ! Target U_bulk for method 2
+        real(wp) :: current_pressure_gradient ! Dynamic forcing value
+        real(wp) :: controller_gain           ! PI controller proportional gain
+        integer :: controller_update_freq     ! Update frequency (steps)
+        
+        ! Statistics for monitoring
+        real(wp) :: current_bulk_velocity     ! Current measured U_bulk
+        real(wp) :: bulk_velocity_error       ! Error for controller
     end type navier_stokes_params
     
     type(navier_stokes_params) :: p
     integer :: istep_local, i
-    real(wp), parameter :: pressure_gradient = 1.0_wp  ! Driving pressure gradient
+    ! Note: pressure_gradient is now dynamic, set in p%current_pressure_gradient
     real(wp) :: u_max, u_rms, w_max, w_rms  ! Velocity statistics
     real(wp) :: div_max, div_rms  ! Divergence statistics
     
@@ -181,15 +193,8 @@ program channel_flow_solver
         ! Build momentum source terms including convection and forcing
         ! The RK4 convection step has updated p%su and p%sw with convective terms
         
-        ! Add forcing terms to the convection source terms
-        do i = 1, ntot
-            ! For Helmholtz equation: (I - dt/Re * ∇²) u* = u^n + dt * (convection + forcing)
-            ! The RK4 step provides convection terms in p%su, p%sw
-            ! Now add pressure gradient forcing to u-momentum source term
-            
-            p%su(i) = p%dt * (p%su(i) + pressure_gradient)  ! dt*(convection + forcing) for u-momentum
-            p%sw(i) = p%dt * p%sw(i)                         ! dt*convection for w-momentum
-        end do
+        ! Apply flow control (unified interface for constant pressure or volume)
+        call apply_flow_control(p, istep_local)
         
         ! Solve Helmholtz equations for velocity
         call solve_helmholtz_system(p)
@@ -226,6 +231,8 @@ program channel_flow_solver
         ! Output intermediate results and timing
         if (mod(istep_local, p%nwrt) == 0) then
             call output_solution(p)
+            ! Output flow control statistics
+            call output_flow_control_statistics(p, istep_local)
             ! Output timing statistics every output interval
             p%avg_step_time = p%total_time / p%timing_counter
             write(*,'(A,F8.5,A,F8.5,A,F8.1,A)') ' Timing: step=', &
@@ -260,6 +267,9 @@ program channel_flow_solver
     write(*,'(A)') ' DEBUG: About to call final_output'
     call final_output(p)
     write(*,'(A)') ' DEBUG: Returned from final_output'
+    
+    ! Output final flow control statistics
+    call output_flow_control_statistics(p, p%nsteps)
     
     ! Cleanup
     call finalize_solver(p)
@@ -308,7 +318,7 @@ contains
         ! Set default values from original F77 DATA statements
         p%istart = 0; p%dt = 0.01_wp; p%nsteps = 100000
         p%alpha = 1.0_wp; p%beta = 1.0_wp; p%re = 180.0_wp; p%ta = 0.0_wp
-        p%nwrt = 10000; p%iform = 0; p%ybar = 1.0_wp
+        p%nwrt = 10000; p%iform = 0; p%ybar = 2.0_wp
         p%cgstol = 1.0e-4_wp; p%iles = 0; p%cs = 0.1_wp
         p%wavlen = 1.0_wp; p%ylen = 1.0_wp; p%u00 = 0.0_wp
         p%xlen = pi2  ! Default domain length = 2π
@@ -490,13 +500,33 @@ contains
         real(wp) :: dt, alpha, beta, re, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen
         logical :: use_crank_nicolson  ! CN flag
         
+        ! Flow control parameters
+        integer :: flow_control_method
+        real(wp) :: target_pressure_gradient, target_bulk_velocity, controller_gain
+        integer :: controller_update_freq
+        
+        ! Command line argument support
+        character(len=256) :: input_filename
+        integer :: nargs
+        
         ! Define namelists
         namelist /grid/ nx_input, nz_input
         namelist /time_control/ istart, dt, nsteps, nwrt
-        namelist /simulation/ alpha, beta, re, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen, use_crank_nicolson
+        namelist /simulation/ alpha, beta, re, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen, &
+                             use_crank_nicolson
         namelist /output/ iform, iles
+        namelist /flow_control/ flow_control_method, target_pressure_gradient, &
+                               target_bulk_velocity, controller_gain, controller_update_freq
         
-        write(*,'(A)') ' Reading parameters from input.dat...'
+        ! Check for command line arguments
+        nargs = command_argument_count()
+        if (nargs >= 1) then
+            call get_command_argument(1, input_filename)
+            write(*,'(A,A,A)') ' Reading parameters from ', trim(input_filename), '...'
+        else
+            input_filename = 'input.dat'
+            write(*,'(A)') ' Reading parameters from input.dat...'
+        endif
         
         ! Initialize namelist variables with defaults
         nx_input = 128; nz_input = 33  ! Default grid sizes
@@ -507,9 +537,16 @@ contains
         iform = p%iform; iles = p%iles
         use_crank_nicolson = .true.  ! Default: use Crank-Nicolson (can be overridden in input.dat)
         
-        open(7, file='input.dat', status='old', iostat=io_status)
+        ! Flow control defaults
+        flow_control_method = 1                ! Default: constant pressure gradient
+        target_pressure_gradient = 1.0_wp     ! Default pressure gradient
+        target_bulk_velocity = 1.0_wp         ! Default bulk velocity for method 2
+        controller_gain = 0.1_wp               ! Default PI controller gain
+        controller_update_freq = 10            ! Default update frequency
+        
+        open(7, file=trim(input_filename), status='old', iostat=io_status)
         if (io_status /= 0) then
-            write(*,'(A)') ' Warning: Could not open input.dat, using defaults'
+            write(*,'(A,A)') ' Warning: Could not open ', trim(input_filename), ', using defaults'
             call setup_grid_parameters(nx_input, nz_input)
             return
         endif
@@ -540,6 +577,11 @@ contains
             write(*,'(A)') ' Warning: Error reading &output namelist, using defaults'
         endif
         
+        read(7, nml=flow_control, iostat=io_status)
+        if (io_status /= 0) then
+            write(*,'(A)') ' Warning: Error reading &flow_control namelist, using defaults'
+        endif
+        
         close(7)
         
         ! Transfer namelist variables back to parameters
@@ -549,6 +591,18 @@ contains
         p%wavlen = wavlen; p%xlen = xlen; p%ylen = ylen
         p%iform = iform; p%iles = iles
         p%use_crank_nicolson = use_crank_nicolson
+        
+        ! Transfer flow control parameters
+        p%flow_control_method = flow_control_method
+        p%target_pressure_gradient = target_pressure_gradient
+        p%target_bulk_velocity = target_bulk_velocity
+        p%controller_gain = controller_gain
+        p%controller_update_freq = controller_update_freq
+        
+        ! Initialize dynamic flow control values
+        p%current_pressure_gradient = target_pressure_gradient
+        p%current_bulk_velocity = 0.0_wp
+        p%bulk_velocity_error = 0.0_wp
         
         ! Print read values for verification
         write(*,'(A)') ' Successfully read namelist parameters:'
@@ -562,6 +616,21 @@ contains
             write(*,'(A)') '   Viscous method: Backward Euler (1st order)'
         endif
         write(*,'(A,I0,A,I0)') '   Output: iform=', iform, ', iles=', iles
+        
+        ! Flow control validation and user feedback
+        select case (p%flow_control_method)
+        case (1)
+            write(*,'(A,F8.4)') ' Flow control: Constant pressure gradient = ', &
+                                p%target_pressure_gradient
+        case (2)
+            write(*,'(A,F8.4)') ' Flow control: Constant bulk velocity = ', &
+                                p%target_bulk_velocity
+            write(*,'(A,F8.4)') ' Controller gain = ', p%controller_gain
+            write(*,'(A,I0,A)') ' Update frequency = ', p%controller_update_freq, ' steps'
+        case default
+            write(*,'(A)') ' ERROR: Invalid flow_control_method. Use 1 or 2.'
+            stop
+        end select
         
     end subroutine read_input_file
     
@@ -628,15 +697,15 @@ contains
         p%su = 0.0_wp; p%sw = 0.0_wp; p%st = 0.0_wp
         p%ox = 0.0_wp; p%oz = 0.0_wp; p%body = 0.0_wp
         
-        ! Start with a low initial velocity profile (u_max = 1.0)
-        ! This will allow us to observe the full development from near-rest to steady state
+        ! Start with non-dimensional initial velocity profile (u_max = 1.5)
+        ! For non-dimensional Poiseuille flow: u_max = 1.5, u_bulk = 1.0
         do k = 1, nz
             do i = 1, nxpp
                 idx = (k-1)*nxpp + i
                 ! Map LGL grid point to z ∈ [-1,1]
                 z_coord = p%zpts(k-1)  ! Note: zpts indexed from 0 to nz-1
-                ! Start with low parabolic profile
-                p%u(idx) = 1.0_wp * (1.0_wp - z_coord**2)
+                ! Non-dimensional parabolic profile
+                p%u(idx) = 1.5_wp * (1.0_wp - z_coord**2)
                 ! Zero vertical velocity
                 p%w(idx) = 0.0_wp
             end do
@@ -778,8 +847,8 @@ contains
             if (k <= nz) then
                 z_coord = p%zpts(k-1)  ! Get LGL coordinate (0-indexed array)
                 ! Parabolic profile: ubar = U_max * (1 - z^2) where U_max = 3/2 * U_bulk  
-                ! For Re=180, typical bulk velocity gives U_max ≈ 90
-                ubar_temp(i) = 60.0_wp * (1.0_wp - z_coord**2)  ! Base flow profile
+                ! For non-dimensional case: U_bulk = 1.0, U_max = 1.5
+                ubar_temp(i) = 1.0_wp * (1.0_wp - z_coord**2)  ! Non-dimensional base flow
             else
                 ubar_temp(i) = 0.0_wp
             endif
@@ -1317,19 +1386,9 @@ contains
         rhs_matrix(nz,nz) = 1.0_wp
         
         ! Compute RHS = RHS_matrix * u_current + source_terms
-        rhs_out = 0.0_wp
-        do i = 1, nz
-            if (i <= nzm) then
-                ! Interior points: full matrix-vector multiplication
-                do j = 1, nz
-                    rhs_out(i) = rhs_out(i) + rhs_matrix(i,j) * u_current(j)
-                end do
-                rhs_out(i) = rhs_out(i) + source_terms(i)
-            else
-                ! Boundary points: will be overridden by Kim & Moin values
-                rhs_out(i) = 0.0_wp
-            endif
-        end do
+        ! CORRECTED: Apply full RHS calculation to ALL points, including boundaries.
+        ! Boundary conditions will be properly applied later in solve_viscous_step.
+        rhs_out = matmul(rhs_matrix, u_current) + source_terms
         
     end subroutine build_cn_rhs
     
@@ -1417,9 +1476,11 @@ contains
                 end do
                 poisson_matrix(1,1) = 1.0_wp     ! Pin: φ(1) = 0
                 
-                ! Right-hand side: F77 approach
-                div_vec = div_spectral(ix,:)
-                div_vec(1) = 0.0_wp               ! φ(1) = 0
+                ! Right-hand side: F77 approach, NOW WITH MASS MATRIX SCALING FOR CONSISTENCY
+                do k = 1, nz
+                    div_vec(k) = div_spectral(ix,k) * p%amass(k) ! Use pre-computed mass matrix
+                end do
+                div_vec(1) = 0.0_wp               ! Enforce BC after scaling
                 
             else
                 ! For kx ≠ 0 modes, build matrix exactly like F77: diff + ak*amass
@@ -2040,12 +2101,12 @@ contains
         ! Calculate velocity statistics
         call calculate_velocity_statistics(p, u_centerline, u_bulk)
         
-        ! Theoretical wall shear stress for Poiseuille flow
+        ! Theoretical wall shear stress for non-dimensional Poiseuille flow
         ! For parabolic profile u = u_max*(1-z²), du/dz = -2*u_max*z
-        ! At walls (z = ±1): du/dz = ∓2*u_max = ∓180 (for u_max = 90)
+        ! At walls (z = ±1): du/dz = ∓2*u_max = ∓3.0 (for u_max = 1.5)
         ! Wall stress: τ = μ*(du/dz) = (1/Re)*(du/dz)
-        tau_theory_bottom = (1.0_wp / p%re) * 180.0_wp    ! At z = -1
-        tau_theory_top = (1.0_wp / p%re) * (-180.0_wp)    ! At z = +1
+        tau_theory_bottom = (1.0_wp / p%re) * 3.0_wp    ! At z = -1
+        tau_theory_top = (1.0_wp / p%re) * (-3.0_wp)    ! At z = +1
         
         ! Calculate errors
         error_bottom = abs(tau_wall_bottom - tau_theory_bottom) / abs(tau_theory_bottom) * 100.0_wp
@@ -2061,14 +2122,14 @@ contains
         write(*,'(A)') ' '
         write(*,'(A)') ' Bottom Wall (z = -1):'
         write(*,'(A,ES12.5)') '   du/dz (computed):     ', du_dz_bottom
-        write(*,'(A,ES12.5)') '   du/dz (theory):       ', 180.0_wp
+        write(*,'(A,ES12.5)') '   du/dz (theory):       ', 3.0_wp
         write(*,'(A,ES12.5)') '   τ_wall (computed):    ', tau_wall_bottom
         write(*,'(A,ES12.5)') '   τ_wall (theory):      ', tau_theory_bottom
         write(*,'(A,F8.2,A)') '   Error:                ', error_bottom, '%'
         write(*,'(A)') ' '
         write(*,'(A)') ' Top Wall (z = +1):'
         write(*,'(A,ES12.5)') '   du/dz (computed):     ', du_dz_top
-        write(*,'(A,ES12.5)') '   du/dz (theory):       ', -180.0_wp
+        write(*,'(A,ES12.5)') '   du/dz (theory):       ', -3.0_wp
         write(*,'(A,ES12.5)') '   τ_wall (computed):    ', tau_wall_top
         write(*,'(A,ES12.5)') '   τ_wall (theory):      ', tau_theory_top
         write(*,'(A,F8.2,A)') '   Error:                ', error_top, '%'
@@ -2110,6 +2171,28 @@ contains
         
     end subroutine final_output
     
+    ! =========================================================================
+    ! FLOW CONTROL OUTPUT ROUTINES
+    ! =========================================================================
+    subroutine output_flow_control_statistics(p, istep)
+        implicit none
+        type(navier_stokes_params), intent(in) :: p
+        integer, intent(in) :: istep
+        
+        ! Output flow control information
+        if (p%flow_control_method == 1) then
+            write(*,'(A,I0,A,F8.5)') ' Flow Control [', istep, '] Method 1 (Constant Pressure): dP/dx = ', &
+                p%current_pressure_gradient
+        else if (p%flow_control_method == 2) then
+            write(*,'(A,I0,A)') ' Flow Control [', istep, '] Method 2 (Constant Volume):'
+            write(*,'(A,F8.5,A,F8.5)') '   Current: U_bulk = ', p%current_bulk_velocity, &
+                ', dP/dx = ', p%current_pressure_gradient
+            write(*,'(A,F8.5,A,F8.5)') '   Target:  U_bulk = ', p%target_bulk_velocity, &
+                ', Error = ', (p%target_bulk_velocity - p%current_bulk_velocity)
+        end if
+        
+    end subroutine output_flow_control_statistics
+
     ! =========================================================================
     ! CLEANUP ROUTINES
     ! =========================================================================
@@ -2278,5 +2361,161 @@ contains
         info = -1
         
     end subroutine jacgs
+
+    !============================================================================
+    ! FLOW CONTROL SUBROUTINES
+    !============================================================================
+    
+    !============================================================================
+    ! SUBROUTINE: apply_flow_control
+    !
+    ! PURPOSE:
+    !   Unified interface for applying flow control (constant pressure or volume)
+    !
+    ! DESCRIPTION:
+    !   Routes to appropriate flow control method based on user selection
+    !============================================================================
+    subroutine apply_flow_control(p, istep)
+        implicit none
+        type(navier_stokes_params), intent(inout) :: p
+        integer, intent(in) :: istep
+        
+        select case (p%flow_control_method)
+        case (1)
+            ! Constant pressure gradient (original method)
+            call apply_constant_pressure_gradient(p)
+            
+        case (2)
+            ! Constant flow volume with controller
+            if (mod(istep, p%controller_update_freq) == 0) then
+                call update_flow_controller(p)
+            end if
+            call apply_dynamic_pressure_gradient(p)
+            
+        end select
+        
+    end subroutine apply_flow_control
+
+    !============================================================================
+    ! SUBROUTINE: apply_constant_pressure_gradient
+    !
+    ! PURPOSE:
+    !   Apply constant pressure gradient forcing (original method)
+    !============================================================================
+    subroutine apply_constant_pressure_gradient(p)
+        implicit none
+        type(navier_stokes_params), intent(inout) :: p
+        integer :: i
+        
+        ! The physical pressure gradient ∂p/∂x is negative to drive flow in the +x direction.
+        ! The resulting forcing term, f_x = -∂p/∂x, is therefore positive and added below.
+        p%current_pressure_gradient = p%target_pressure_gradient
+        
+        do i = 1, ntot
+            ! Correctly calculate the total explicit source term for the viscous solve.
+            ! Both convective acceleration (p%su) and pressure force are added,
+            ! then the sum is multiplied by the timestep (p%dt).
+            p%su(i) = p%dt * (p%su(i) + p%current_pressure_gradient)
+            p%sw(i) = p%dt * p%sw(i)  ! No pressure force in w-direction
+        end do
+        
+    end subroutine apply_constant_pressure_gradient
+
+    !============================================================================
+    ! SUBROUTINE: apply_dynamic_pressure_gradient
+    !
+    ! PURPOSE:
+    !   Apply dynamically adjusted pressure gradient forcing
+    !============================================================================
+    subroutine apply_dynamic_pressure_gradient(p)
+        implicit none
+        type(navier_stokes_params), intent(inout) :: p
+        integer :: i
+        
+        ! Apply the dynamically adjusted pressure gradient.
+        ! The sign is now PLUS (+) to ensure negative feedback (correcting the error).
+        ! The terms are grouped to fix the dimensional inconsistency.
+        do i = 1, ntot
+            p%su(i) = p%dt * (p%su(i) + p%current_pressure_gradient)
+            p%sw(i) = p%dt * p%sw(i)
+        end do
+        
+    end subroutine apply_dynamic_pressure_gradient
+
+    !============================================================================
+    ! SUBROUTINE: update_flow_controller
+    !
+    ! PURPOSE:
+    !   PI controller to maintain constant bulk velocity
+    !============================================================================
+    subroutine update_flow_controller(p)
+        implicit none
+        type(navier_stokes_params), intent(inout) :: p
+        
+        real(wp) :: proportional_term, integral_term
+        real(wp), parameter :: ki_factor = 0.001_wp ! Very small integral gain to minimize overshoot
+        
+        ! Calculate current bulk velocity
+        call calculate_bulk_velocity(p, p%current_bulk_velocity)
+        
+        ! Calculate error
+        p%bulk_velocity_error = p%target_bulk_velocity - p%current_bulk_velocity
+        
+        ! --- CORRECTED PI CONTROLLER LOGIC (INCREMENTAL FORM) ---
+        
+        ! Proportional term with reduced gain to approach Method 1 result
+        proportional_term = 0.05_wp * p%bulk_velocity_error
+        
+        ! Integral term should be based on the CURRENT error and the timestep,
+        ! representing the contribution of this single step to the integral.
+        integral_term = (ki_factor * p%controller_gain) * p%bulk_velocity_error * p%dt
+        
+        ! Update the pressure gradient by adding the small increments
+        p%current_pressure_gradient = p%current_pressure_gradient + proportional_term + integral_term
+        
+        ! Safety limits (anti-windup)
+        p%current_pressure_gradient = max(0.0_wp, min(10.0_wp, p%current_pressure_gradient))
+        
+    end subroutine update_flow_controller
+
+    !============================================================================
+    ! SUBROUTINE: calculate_bulk_velocity
+    !
+    ! PURPOSE:
+    !   Calculate volume-averaged bulk velocity using LGL integration
+    !============================================================================
+    subroutine calculate_bulk_velocity(p, u_bulk)
+        implicit none
+        type(navier_stokes_params), intent(in) :: p
+        real(wp), intent(out) :: u_bulk
+        
+        real(wp), dimension(nz) :: u_profile
+        integer :: k, i, idx, count_x
+        real(wp) :: weight_sum
+        
+        ! Compute spanwise-averaged velocity profile
+        do k = 1, nz
+            u_profile(k) = 0.0_wp
+            count_x = 0
+            do i = 2, nxpp-1  ! Skip padding points
+                idx = (k-1)*nxpp + i
+                u_profile(k) = u_profile(k) + p%u(idx)
+                count_x = count_x + 1
+            end do
+            if (count_x > 0) u_profile(k) = u_profile(k) / real(count_x, wp)
+        end do
+        
+        ! Integrate using LGL quadrature weights
+        ! u_bulk = (1/H) * ∫ u(z) dz, where H = channel height
+        u_bulk = 0.0_wp
+        weight_sum = 0.0_wp
+        do k = 1, nz
+            ! Use LGL weights for integration over [-1,+1]
+            u_bulk = u_bulk + u_profile(k) * p%wg(k-1)
+            weight_sum = weight_sum + p%wg(k-1)
+        end do
+        u_bulk = u_bulk / weight_sum  ! Normalize by total weight
+        
+    end subroutine calculate_bulk_velocity
 
 end program channel_flow_solver

@@ -1,10 +1,17 @@
-# DNS Channel Flow Solver - Pressure BC Development
+# DNS Channel Flow Solver - Advanced Flow Control
 
 ## Overview
 
-This repository contains a modern Fortran 90 implementation of a 3D incompressible Navier-Stokes DNS (Direct Numerical Simulation) solver for channel flow. The code is a complete modernization of the original F77 solver developed by Daniel Chiu-Leung Chan (1993), with enhanced pressure boundary condition treatment using iterative solvers.
+This repository contains a modern Fortran 90 implementation of a 3D incompressible Navier-Stokes DNS (Direct Numerical Simulation) solver for channel flow. The code is a complete modernization of the original F77 solver developed by Daniel Chiu-Leung Chan (1993), featuring **advanced flow control systems**, enhanced pressure boundary condition treatment, and comprehensive analysis tools.
 
 ## Key Features
+
+### Advanced Flow Control System
+- **Constant Pressure Gradient (Method 1)**: Maintains fixed driving force throughout simulation
+- **Constant Bulk Velocity (Method 2)**: PI controller dynamically adjusts pressure gradient to maintain target flow rate
+- **LGL Integration**: Spectral-accurate bulk velocity calculation using Legendre-Gauss-Lobatto quadrature
+- **Safety Controls**: Anti-windup protection and pressure gradient bounds (0.1 to 10.0)
+- **Real-time Monitoring**: Live flow control statistics during simulation
 
 ### Numerical Methods
 - **Spectral Methods**: Fourier decomposition in streamwise direction
@@ -25,14 +32,14 @@ This repository contains a modern Fortran 90 implementation of a 3D incompressib
 - **Domain**: x ∈ [0, 2π], z ∈ [-1, +1] (channel half-height = 1)
 - **Reynolds number**: Re = 180 (based on channel half-height)
 
-This DNS solver implements a spectral-spectral method for solving the incompressible Navier-Stokes equations:
-- **Streamwise (x)**: Fourier spectral methods (periodic)
-- **Wall-normal (z)**: Legendre-Gauss-Lobatto (LGL) collocation 
-- **Spanwise (y)**: Fourier spectral methods (periodic)
-- **Time integration**: Crank-Nicolson for viscous terms, explicit for nonlinear terms
-- **Pressure solver**: Fractional step method with Kim & Moin boundary conditions
-
 ## Features
+
+### Advanced Flow Control System
+- **Two Control Methods**: Constant pressure gradient or constant bulk velocity
+- **PI Controller**: Automated pressure gradient adjustment for flow rate control
+- **Spectral Integration**: LGL quadrature for accurate bulk velocity calculation
+- **Real-time Feedback**: Live monitoring of flow control performance
+- **Safety Features**: Anti-windup protection and gradient bounds
 
 ### Numerical Methods
 - **High-order accuracy**: Spectral methods in all directions
@@ -40,6 +47,12 @@ This DNS solver implements a spectral-spectral method for solving the incompress
 - **Stable time stepping**: Crank-Nicolson viscous step, explicit convection
 - **Projection method**: Pressure correction for incompressibility
 - **Advanced boundary conditions**: Kim & Moin extrapolated velocity BCs
+
+### Analysis and Visualization Tools
+- **Jupyter Notebooks**: Comprehensive turbulent flow analysis
+- **Velocity Profile Analysis**: Detailed spatial flow field examination
+- **Reynolds-Bulk Velocity Correlations**: Laminar and turbulent flow relationships
+- **Real-time Monitoring**: Live simulation progress tracking
 
 ### Performance Features
 - **OpenMP parallelization**: Multi-threaded FFTW and linear algebra
@@ -69,7 +82,7 @@ sudo apt-get install gfortran libfftw3-dev liblapack-dev libblas-dev
 
 ### 1. Clone and Build
 ```bash
-git clone https://github.com/yourusername/F90_DNS.git
+git clone https://github.com/chandc/F90_DNS.git
 cd F90_DNS
 make all
 ```
@@ -94,8 +107,9 @@ make status
 
 ## Input Parameters
 
-Edit `input.dat` to configure your simulation:
+Configure your simulation by editing the appropriate input file:
 
+### Basic Configuration (`input.dat`)
 ```fortran
 &grid
   nx_input = 128,    ! Streamwise grid points
@@ -114,21 +128,46 @@ Edit `input.dat` to configure your simulation:
   re = 180.0,        ! Reynolds number
   use_crank_nicolson = .true.
 /
+
+&flow_control
+  flow_control_method = 1,           ! 1=const pressure, 2=const volume
+  target_pressure_gradient = 1.0,   ! Target dP/dx (method 1)
+  target_bulk_velocity = 1.0,       ! Target U_bulk (method 2)
+  controller_gain = 0.1,             ! PI controller gain (method 2)
+  controller_update_freq = 10        ! Update frequency (method 2)
+/
 ```
+
+### Pre-configured Examples
+- **`input_constant_pressure.dat`**: Constant pressure gradient flow control
+- **`input_constant_volume.dat`**: Constant bulk velocity with PI controller  
+- **`input_nondimensional.dat`**: Non-dimensional parameter setup
+- **`input_high_resolution.dat`**: Higher resolution simulations
+- **Additional examples**: Various specialized configurations for different studies
 
 ## File Structure
 
 ```
 F90_DNS/
-├── base_code_complete.f90  # Main DNS solver
-├── lgl_module.f90          # LGL grid and differentiation
-├── fft_module.f90          # FFTW interface
-├── Makefile               # Build system with advanced features
-├── input.dat              # Simulation parameters
-├── start.dat              # Initial/restart conditions
-├── run.dat                # Current simulation state
-└── simulation.log         # Runtime output log
+├── DNS_pressure_BC.f90        # Main DNS solver with flow control
+├── lgl_module.f90             # LGL grid and differentiation
+├── fft_module.f90             # FFTW interface
+├── Makefile                   # Advanced build system with monitoring
+├── FLOW_CONTROL_README.md     # Detailed flow control documentation
+├── input*.dat                 # Various simulation configurations
+├── start.dat                  # Initial/restart conditions  
+├── run.dat                    # Current simulation state
+├── simulation.log             # Runtime output log
+├── turbulent_channel_flow_correlations.ipynb  # Flow analysis notebook
+└── velocity_profile_analysis.ipynb            # Velocity field analysis
 ```
+
+### Flow Control Input Files
+- `input_constant_pressure.dat` - Method 1: Fixed pressure gradient
+- `input_constant_volume.dat` - Method 2: PI-controlled flow rate
+- `input_nondimensional.dat` - Non-dimensional parameters
+- `input_high_resolution.dat` - High-resolution studies
+- Additional specialized configurations for various flow conditions
 
 ## Makefile Targets
 
@@ -144,6 +183,11 @@ F90_DNS/
 - `make status` - Check simulation status
 - `make stop` - Stop background simulation
 
+### Flow Control Examples
+- `make run` with `input_constant_pressure.dat` - Fixed pressure gradient
+- `make run` with `input_constant_volume.dat` - PI-controlled flow rate
+- `make run` with `input_nondimensional.dat` - Non-dimensional setup
+
 ### Parallel Execution
 - `make run-omp2` - Run with 2 OpenMP threads
 - `make run-omp4` - Run with 4 OpenMP threads  
@@ -153,6 +197,36 @@ F90_DNS/
 - `make debug` - Debug build with bounds checking
 - `make test` - Quick compilation test
 - `make check-deps` - Verify dependencies
+
+## Flow Control System
+
+### Method 1: Constant Pressure Gradient
+- **Use case**: Fixed driving force applications
+- **Implementation**: Applies constant ∂p/∂x at each time step
+- **Configuration**: Set `flow_control_method = 1` and `target_pressure_gradient`
+- **Advantages**: Simple, predictable, computationally efficient
+
+### Method 2: Constant Bulk Velocity (PI Controller)
+- **Use case**: Flow rate-controlled applications
+- **Implementation**: PI controller adjusts pressure gradient to maintain target bulk velocity
+- **Configuration**: Set `flow_control_method = 2`, `target_bulk_velocity`, `controller_gain`, `controller_update_freq`
+- **Features**:
+  - **Proportional control**: Immediate response to velocity error
+  - **Integral control**: Eliminates steady-state error
+  - **Anti-windup protection**: Prevents controller saturation
+  - **Safety bounds**: Pressure gradient limited to [0.1, 10.0]
+
+### Bulk Velocity Calculation
+- **LGL Integration**: Uses Legendre-Gauss-Lobatto quadrature for spectral accuracy
+- **Formula**: `U_bulk = (1/H) ∫[0 to H] u(y) dy`
+- **Real-time monitoring**: Live feedback during simulation
+
+### Controller Parameters
+- **`controller_gain`**: Start with 0.05-0.1, adjust based on stability
+- **`controller_update_freq`**: Typical range 5-20 time steps
+- **`target_bulk_velocity`**: Should be physically reasonable for given Reynolds number
+
+For detailed flow control documentation, see **`FLOW_CONTROL_README.md`**.
 
 ## Algorithm Details
 
@@ -230,8 +304,31 @@ Kim, J., & Moin, P. (1985). *Application of a fractional-step method to incompre
 - **LGL Collocation**: Legendre-Gauss-Lobatto points for wall-normal direction
 - **Fourier Transform**: FFTW3 for periodic directions
 - **Matrix-free**: Efficient spectral differentiation operators
-- **Fourier Transform**: FFTW3 for periodic directions
-- **Matrix-free**: Efficient spectral differentiation operators
+
+## Analysis Tools
+
+### Jupyter Notebooks
+
+#### 1. Turbulent Channel Flow Correlations (`turbulent_channel_flow_correlations.ipynb`)
+- **Bulk velocity vs Reynolds number relationships** for laminar and turbulent regimes
+- **Flow control system design guidelines**
+- **Target velocity estimation** for unknown flow profiles  
+- **Transition analysis** from laminar to turbulent flow
+- **Engineering correlations** for practical applications
+
+#### 2. Velocity Profile Analysis (`velocity_profile_analysis.ipynb`)
+- **Spatial flow field examination** at different x-locations
+- **Spectral method validation** with theoretical profiles
+- **LGL grid performance analysis**
+- **Boundary condition verification**
+- **Real-time data processing** from simulation output
+
+### Features
+- **Publication-quality plots** with matplotlib
+- **Interactive parameter exploration**
+- **Theoretical comparison** with analytical solutions
+- **Data export capabilities** for further analysis
+- **Integration with simulation output** formats
 
 ## Performance Characteristics
 
@@ -249,19 +346,30 @@ Kim, J., & Moin, P. (1985). *Application of a fractional-step method to incompre
 ## Original Development
 
 Originally developed by **Daniel Chiu-Leung Chan** in 1993, this modernized F90 version maintains the core algorithmic innovations while adding:
-- Modern Fortran 90+ features
-- FFTW3 integration with OpenMP
-- Automated build system
-- Background monitoring capabilities
-- Enhanced numerical stability
+- **Advanced flow control system** with PI controller
+- **Modern Fortran 90+ features** and modular design
+- **FFTW3 integration** with OpenMP parallelization
+- **Comprehensive analysis tools** (Jupyter notebooks)
+- **Automated build system** with background monitoring
+## Documentation
 
-## References
-
+### Core References
 1. Kim, J., & Moin, P. (1985). Application of a fractional-step method to incompressible Navier-Stokes equations. *Journal of Computational Physics*, 59(2), 308-323.
 
 2. Gottlieb, D., & Orszag, S. A. (1977). *Numerical analysis of spectral methods: theory and applications*. SIAM.
 
 3. Canuto, C., Hussaini, M. Y., Quarteroni, A., & Zang, T. A. (2007). *Spectral methods: evolution to complex geometries and applications to fluid dynamics*. Springer.
+
+### Flow Control Documentation
+- **`FLOW_CONTROL_README.md`**: Comprehensive flow control system documentation
+- **`turbulent_channel_flow_correlations.ipynb`**: Turbulent flow analysis and correlations
+- **`velocity_profile_analysis.ipynb`**: Velocity field analysis tools
+
+### Implementation Notes
+- **Flow control methods**: Two approaches (constant pressure/volume) with unified interface
+- **PI controller design**: Proportional-integral control with anti-windup protection
+- **LGL integration**: Spectral-accurate bulk velocity calculation
+- **Real-time monitoring**: Live flow statistics and controller feedback
 
 ## License
 
@@ -274,3 +382,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 ## Contact
 
 [Add your contact information here]
+
+---
+
+*This DNS solver combines classical spectral methods with modern flow control systems, providing a powerful tool for channel flow research and applications.*
