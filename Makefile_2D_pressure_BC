@@ -52,16 +52,16 @@ FFTW_LIBS = $(FFTW_LIBDIR) -lfftw3 -lfftw3_omp -llapack -lblas -lm
 # Source files and dependencies for pressure BC version
 LGL_MODULE = lgl_module.f90
 FFT_MODULE = fft_module.f90
-MAIN_SOURCE = DNS_pressure_BC.f90
+MAIN_SOURCE = DNS_pressure_BC_2D.f90
 
 # Object files
 LGL_OBJ = lgl_module.o
 FFT_OBJ = fft_module.o
-MAIN_OBJ = DNS_pressure_BC.o
+MAIN_OBJ = DNS_pressure_BC_2D.o
 OBJECTS = $(LGL_OBJ) $(FFT_OBJ) $(MAIN_OBJ)
 
 # Executable name
-TARGET = dns_pressure_bc
+TARGET = dns_pressure_BC_2D
 
 # Module files (auto-generated)
 MOD_FILES = lgl_module.mod fft_module.mod
@@ -112,7 +112,7 @@ monitor:
 			echo "No simulation log found."; \
 		fi; \
 		echo "=== Process status ==="; \
-		if pgrep -f dns_pressure_bc > /dev/null; then \
+		if pgrep -f dns_pressure_BC_2D > /dev/null; then \
 			echo "✓ DNS Pressure BC solver is running"; \
 		else \
 			echo "✗ DNS Pressure BC solver is not running"; \
@@ -124,9 +124,9 @@ monitor:
 
 status:
 	@echo "=== DNS Pressure BC Status ==="
-	@if pgrep -f dns_pressure_bc > /dev/null; then \
+	@if pgrep -f dns_pressure_BC_2D > /dev/null; then \
 		echo "✓ DNS Pressure BC solver is running"; \
-		echo "PID: $$(pgrep -f dns_pressure_bc)"; \
+		echo "PID: $$(pgrep -f dns_pressure_BC_2D)"; \
 	else \
 		echo "✗ DNS Pressure BC solver is not running"; \
 	fi
@@ -140,8 +140,8 @@ status:
 
 stop:
 	@echo "Stopping DNS Pressure BC solver..."
-	@if pgrep -f dns_pressure_bc > /dev/null; then \
-		pkill -f dns_pressure_bc; \
+	@if pgrep -f dns_pressure_BC_2D > /dev/null; then \
+		pkill -f dns_pressure_BC_2D; \
 		echo "DNS Pressure BC solver stopped."; \
 	else \
 		echo "No DNS Pressure BC solver process found."; \

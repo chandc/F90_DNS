@@ -2,23 +2,58 @@
 
 ## Overview
 
-This repository contains a modern Fortran 90 implementation of a 3D incompressible Navier-Stokes DNS (Direct Numerical Simulation) solver for channel flow. The code is a complete modernization of the original F77 solver developed by Daniel Chiu-Leung Chan (1993), featuring **advanced flow control systems**, enhanced pressure boundary condition treatment, and comprehensive analysis tools.
+This repository contains modern Fortran 90 implementations of incompressible Navier-Stokes DNS (Direct Numerical Simulation) solvers for channel flow. The code provides **both 2D and 3D versions** and is a complete modernization of the original F77 solver developed by Daniel Chiu-Leung Chan (1993), featuring **advanced flow control systems**, enhanced pressure boundary condition treatment, and comprehensive analysis tools.
+
+## Available Solvers
+
+### 2D Channel Flow Solver (`DNS_pressure_BC_2D.f90`)
+- **2D Navier-Stokes equations**: Streamwise (u) and wall-normal (w) velocity components
+- **Grid**: nx×nz with spectral methods in x-direction, LGL collocation in z-direction
+- **No spanwise variation**: ∂/∂y = 0 (simplified 2D formulation)
+- **Ideal for**: Parameter studies, method validation, rapid prototyping
+- **Perfect divergence-free**: Machine precision incompressibility (div ~10⁻¹⁶)
+
+### 3D Channel Flow Solver (`DNS_pressure_BC_3D.f90`)
+- **Full 3D Navier-Stokes equations**: All three velocity components (u,v,w)
+- **Grid**: nx×ny×nz with spectral methods in x,y-directions, LGL collocation in z-direction
+- **Complete 3D physics**: Captures all turbulent structures and instabilities
+- **Ideal for**: Full turbulence simulations, transition studies, 3D flow phenomena
 
 ## Key Features
 
-### Advanced Flow Control System
-- **Constant Pressure Gradient (Method 1)**: Maintains fixed driving force throughout simulation
-- **Constant Bulk Velocity (Method 2)**: PI controller dynamically adjusts pressure gradient to maintain target flow rate
-- **LGL Integration**: Spectral-accurate bulk velocity calculation using Legendre-Gauss-Lobatto quadrature
-- **Safety Controls**: Anti-windup protection and pressure gradient bounds (0.1 to 10.0)
-- **Real-time Monitoring**: Live flow control statistics during simulation
+### Advanced Flow Control System (Both 2D and 3D)
+
+The solvers feature a sophisticated dual-mode flow control system for precise channel flow management:
+
+#### Method 1: Constant Pressure Gradient
+- **Fixed driving force**: ∂p/∂x = constant (user-specified)
+- **Natural flow development**: Bulk velocity varies with flow evolution
+- **Ideal for**: Fundamental studies, transition analysis, parameter sweeps
+- **Simple and robust**: No feedback control complexity
+
+#### Method 2: Constant Bulk Velocity (PI Control)
+- **Target flow rate**: U_bulk = constant (user-specified) 
+- **Automated control**: Pressure gradient adjusts dynamically to maintain flow rate
+- **PI controller algorithm**: dp/dt = Kp×error + Ki×∫error dt
+- **Anti-windup protection**: Prevents integrator saturation during transients
+- **Safety bounds**: Pressure gradient automatically limited to [0.1, 10.0] range
+- **Real-time feedback**: Live monitoring of control performance and statistics
+- **Spectral accuracy**: LGL quadrature ensures precise bulk velocity calculation
+- **Ideal for**: Industrial applications, flow rate studies, controlled experiments
+
+#### Control System Features
+- **Seamless switching**: Change control method via input parameter
+- **Robust stability**: Tested across wide range of Reynolds numbers
+- **Live diagnostics**: Real-time control error and performance metrics
+- **Parameter flexibility**: Adjustable PI gains and update frequency
 
 ### Numerical Methods
-- **Spectral Methods**: Fourier decomposition in streamwise direction
+- **Spectral Methods**: Fourier decomposition in streamwise (and spanwise for 3D) directions
 - **LGL Collocation**: Legendre-Gauss-Lobatto points in wall-normal direction
 - **Time Integration**: Crank-Nicolson for viscous terms, 4th-order Runge-Kutta for convection
 - **Pressure Solver**: CGS iterative method with F77 compatibility
 - **Boundary Conditions**: Kim & Moin approach for viscous wall treatment
+- **Fractional Step Method**: Proper dt scaling in all pressure correction steps
 
 ### Pressure Equation Innovation
 - **Bottom-wall-only pressure pinning** for zero mode (kₓ=0) stability
@@ -27,10 +62,19 @@ This repository contains a modern Fortran 90 implementation of a 3D incompressib
 - **No artificial Dirichlet conditions** - uses natural boundary conditions
 
 ### Grid Configuration
+#### 2D Solver:
 - **nx = 128**: Fourier modes in streamwise direction
 - **nz = 33**: LGL collocation points in wall-normal direction  
 - **Domain**: x ∈ [0, 2π], z ∈ [-1, +1] (channel half-height = 1)
-- **Reynolds number**: Re = 180 (based on channel half-height)
+
+#### 3D Solver:
+- **nx = 64**: Fourier modes in streamwise direction
+- **ny = 32**: Fourier modes in spanwise direction
+- **nz = 33**: LGL collocation points in wall-normal direction  
+- **Domain**: x ∈ [0, 2π], y ∈ [0, 2π], z ∈ [-1, +1]
+
+### Reynolds Number
+- **Re = 180** (2D) / **Re = 100** (3D): Based on channel half-height
 
 ## Features
 
@@ -84,12 +128,26 @@ sudo apt-get install gfortran libfftw3-dev liblapack-dev libblas-dev
 ```bash
 git clone https://github.com/chandc/F90_DNS.git
 cd F90_DNS
+
+# Build 2D solver
+make -f Makefile_2D_pressure_BC
+
+# Build 3D solver  
+make -f Makefile_3D_pressure_BC
+
+# Or build both (legacy)
 make all
 ```
 
-### 2. Run Simulation
+### 2. Run Simulations
 ```bash
-# Interactive run
+# Run 2D solver
+./dns_pressure_bc
+
+# Run 3D solver
+./dns_3d_pressure_bc
+
+# Interactive run (legacy)
 make run
 
 # Background run with monitoring

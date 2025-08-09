@@ -1,33 +1,55 @@
 !===============================================================================
 !
-! DNS_PRESSURE_BC_3D.F90 - 3D Incompressible Navier-Stokes Solver
+! DNS_PRESSURE_BC_2D.F90 - 2D Incompressible Navier-Stokes Solver
 !
 ! DESCRIPTION:
-!   Complete 3D extension of the 2D DNS channel flow solver
-!   by Daniel Chiu-Leung Chan (1993). This version implements full 3D
-!   Navier-Stokes equations with spectral methods in both x and y directions.
+!   2D channel flow DNS solver based on the original work
+!   by Daniel Chiu-Leung Chan (1993). This version implements 2D
+!   Navier-Stokes equations with spectral methods in the streamwise direction.
 !
 ! KEY FEATURES:
-!   • Spectral methods in streamwise (x) and spanwise (y) directions using FFTW
+!   • Spectral methods in streamwise (x) direction using FFTW
 !   • Legendre-Gauss-Lobatto (LGL) collocation in wall-normal (z) direction  
 !   • Crank-Nicolson time integration for viscous terms (2nd order accurate)
 !   • 4th-order Runge-Kutta for convective terms (conventional form: -u·∇u)
 !   • Kim & Moin boundary conditions for viscous wall treatment
 !   • CGS iterative solver for pressure Poisson equation (F77-compatible)
 !   • Bottom-wall-only pressure pinning for zero mode stability
-!   • Dual flow control: Method 1 (constant ∂p/∂x) or Method 2 (constant U_bulk)
-!   • Full 3D extension: nx×ny×nz grid with FFT in x,y and LGL in z
+!   • Advanced flow control with two methods:
+!     - Method 1: Constant pressure gradient (∂p/∂x = constant)
+!     - Method 2: Constant bulk velocity with PI controller
+!   • PI control system: Automated pressure gradient adjustment for flow rate control
+!   • LGL integration: Spectral-accurate bulk velocity calculation for feedback
+!   • Safety features: Anti-windup protection and pressure gradient bounds
+!   • 2D formulation: nx×nz grid with FFT in x and LGL in z (no y-variation)
 !
 ! MATHEMATICAL FORMULATION:
-!   Incompressible Navier-Stokes equations in 3D channel flow geometry:
+!   Incompressible Navier-Stokes equations in 2D channel flow geometry:
 !   ∂u/∂t + u·∇u = -∇p + (1/Re)∇²u + f
 !   ∇·u = 0
 !
 !   Fractional step method with pressure correction:
-!   1. Convection step: Compute RK4 convective terms -u·∇u (all components)
+!   1. Convection step: Compute RK4 convective terms -u·∇u (u,w components)
 !   2. Viscous step: Solve (I - dt/(2Re)∇²)u* = u^n + dt*RHS (Crank-Nicolson)
 !   3. Pressure step: Solve ∇²φ = ∇·u*/dt with homogeneous Neumann BC
 !   4. Projection step: u^{n+1} = u* - dt*∇φ (ensures ∇·u^{n+1} = 0)
+!
+! FLOW CONTROL SYSTEM:
+!   Two sophisticated flow control methods for channel flow simulation:
+!
+!   METHOD 1 - Constant Pressure Gradient:
+!   • Fixed driving force: ∂p/∂x = constant (specified in input)
+!   • Simple and robust for fundamental studies
+!   • Bulk velocity varies naturally with flow development
+!
+!   METHOD 2 - Constant Bulk Velocity (PI Control):
+!   • Target flow rate: U_bulk = constant (specified in input)
+!   • Automated pressure gradient adjustment: ∂p/∂x varies dynamically
+!   • PI controller: dp/dt = Kp*error + Ki*∫error dt
+!   • Anti-windup protection: Prevents integrator saturation
+!   • Safety bounds: Pressure gradient limited to [0.1, 10.0] range
+!   • Real-time feedback: Live monitoring of control performance
+!   • Spectral accuracy: LGL quadrature for bulk velocity calculation
 !
 ! NUMERICAL METHODS:
 !   • LGL quadrature: Exact integration of polynomials up to degree 2N-3
@@ -37,10 +59,11 @@
 !
 ! GRID CONFIGURATION:
 !   • nx = 128: Fourier modes in streamwise direction (periodic BC)
-!   • ny = 32:  Fourier modes in spanwise direction (periodic BC)
 !   • nz = 33:  LGL collocation points in wall-normal direction
-!   • nxpp = nx + 2, nypp = ny + 2: Padded grids for FFT efficiency
-!   • Periodic in x,y; no-slip walls at z = ±1
+!   • nxpp = nx + 2: Padded grid for FFT efficiency (dealiasing)
+!   • Domain: x ∈ [0, 2π], z ∈ [-1, +1] (channel half-height = 1)
+!   • 2D formulation: No variation in y-direction (∂/∂y = 0)
+!   • Periodic in x; no-slip walls at z = ±1
 !
 ! PRESSURE SOLVER:
 !   Uses F77-compatible approach with CGS iterative solver:
@@ -154,7 +177,7 @@ program channel_flow_solver
     real(wp) :: div_max, div_rms  ! Divergence statistics
     
     write(*,'(A)') ' ============================================'
-    write(*,'(A)') '   3D Navier-Stokes Channel Flow Solver'
+    write(*,'(A)') '   2D Navier-Stokes Channel Flow Solver'
     write(*,'(A)') '   Complete F90 Conversion'
     write(*,'(A)') '   Originally by Daniel Chiu-Leung Chan, 1993'
     write(*,'(A)') ' ============================================'
@@ -291,7 +314,7 @@ contains
     ! SUBROUTINE: initialize_solver
     !
     ! PURPOSE:
-    !   Main initialization routine for the 3D Navier-Stokes solver
+    !   Main initialization routine for the 2D Navier-Stokes solver
     !
     ! DESCRIPTION:
     !   Sets up all solver components including:
@@ -873,7 +896,7 @@ contains
     !
     ! PERFORMANCE CONSIDERATIONS:
     !   • FFT transforms dominate computational cost
-    !   • Memory bandwidth critical for large 3D arrays
+    !   • Memory bandwidth critical for large 2D arrays
     !   • OpenMP parallelization of loops over wavenumbers
     !
     ! INPUTS:
@@ -1531,10 +1554,11 @@ contains
         allocate(div_spectral(nxhp, nz), phi_spectral(nxhp, nz))
         allocate(poisson_matrix(nz, nz), div_vec(nz), phi_vec(nz))
         
-        ! Compute divergence of current velocity field
+        ! Compute divergence of current velocity field and scale by dt
         call compute_divergence_spectral(p, div_spectral)
+        div_spectral = div_spectral / p%dt  ! Scale by 1/Δt for proper RHS: ∇·u*/Δt
         
-        ! Solve Poisson equation: ∇²φ = ∇·u for pressure correction
+        ! Solve Poisson equation: ∇²φ = ∇·u*/Δt for pressure correction
         do ix = 1, nxhp
             lambda_x = p%xsq(ix)
             
@@ -1700,7 +1724,6 @@ contains
         type(navier_stokes_params), intent(inout) :: p
         real(wp), intent(in) :: phi_spectral(nxhp, nz)
         real(wp), allocatable :: dphidx(:), dphidz(:), phi_physical(:)
-        real(wp), parameter :: alpha_damp = 0.1_wp  ! Reduce damping further
         integer :: i, ix, k
         
         allocate(dphidx(ntot), dphidz(ntot), phi_physical(ntot))
@@ -1717,10 +1740,10 @@ contains
         ! Compute ∂φ/∂z using LGL differentiation
         call compute_z_derivatives(p, phi_physical, dphidz)
         
-        ! Apply pressure correction with very small damping
+        ! Apply pressure correction with proper dt scaling (fractional step method)
         do i = 1, ntot
-            p%u(i) = p%u(i) - alpha_damp * dphidx(i)
-            p%w(i) = p%w(i) - alpha_damp * dphidz(i)
+            p%u(i) = p%u(i) - p%dt * dphidx(i)  ! Proper: u^{n+1} = u* - Δt∇φ
+            p%w(i) = p%w(i) - p%dt * dphidz(i)
         end do
         
         ! Apply boundary conditions after pressure correction
@@ -1768,9 +1791,10 @@ contains
         call fft_backward_2d(p%fft_plan, p%complex_scratch, p%real_scratch)
         call convert_2d_to_1d_from_fft(p, p%real_scratch, dphidz)
         
-        ! Apply full correction: u_new = u - ∂φ/∂x, w_new = w - ∂φ/∂z
-        p%u = p%u - dphidx
-        p%w = p%w - dphidz
+        ! Apply full correction with proper dt scaling (fractional step method)
+        ! Correct form: u^{n+1} = u* - Δt∇φ
+        p%u = p%u - p%dt * dphidx
+        p%w = p%w - p%dt * dphidz
         
         deallocate(dphidx_spectral, dphidz_spectral, dphidx, dphidz)
         
@@ -2119,7 +2143,7 @@ contains
     !   - High precision: Essential for accurate flow control in Method 2
     !
     ! IMPLEMENTATION NOTES:
-    !   - Spanwise averaging: Removes 3D effects, focuses on mean 2D profile
+    !   - 2D formulation: No spanwise variation (∂/∂y = 0)
     !   - Padding point exclusion: Only integrates physical domain points
     !   - Weight normalization: Accounts for coordinate transformation [-1,1] → [-h,h]
     !

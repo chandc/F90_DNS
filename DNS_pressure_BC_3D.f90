@@ -64,7 +64,7 @@ program dns_3d
     ! FRACTIONAL STEP METHOD ARRAYS
     real(wp), allocatable :: u_star(:,:,:), v_star(:,:,:), w_star(:,:,:)  ! Intermediate velocities
     real(wp), allocatable :: phi(:,:,:)                           ! Pressure correction
-    real(wp), allocatable :: dphidx_p(:,:,:), dphidy_p(:,:,:), dphidz_p(:,:,:) ! Previous pressure gradient
+    real(wp), allocatable :: grad_p_prev_x(:,:,:), grad_p_prev_y(:,:,:), grad_p_prev_z(:,:,:) ! Previous total pressure gradient
     
     ! =========================================================================
     ! 3D SOURCE TERMS (EXTENDED: added sv)
@@ -81,6 +81,17 @@ program dns_3d
     real(wp), allocatable :: work4(:,:,:), work5(:,:,:), work6(:,:,:)
     real(wp), allocatable :: work7(:,:,:), work8(:,:,:), work9(:,:,:)
     real(wp), allocatable :: work10(:,:,:), work11(:,:,:), work12(:,:,:)
+    
+    ! =========================================================================
+    ! TIMING VARIABLES (for performance monitoring and divergence correlation)
+    ! =========================================================================
+    real(wp) :: step_start_time, step_end_time, step_duration
+    real(wp) :: total_sim_time = 0.0_wp
+    real(wp) :: min_step_time = huge(1.0_wp)
+    real(wp) :: max_step_time = 0.0_wp
+    real(wp) :: avg_step_time = 0.0_wp
+    real(wp) :: max_divergence = 0.0_wp  ! Global variable to store current max divergence
+    integer :: timing_interval = 100  ! Print timing every N steps
     
     ! =========================================================================
     ! 3D BOUNDARY CONDITIONS (EXTENDED)
@@ -129,6 +140,8 @@ program dns_3d
     ! Main time loop
     write(*,'(A)') ' Starting main time integration...'
     do istart = 1, nsteps
+        call cpu_time(step_start_time)
+        
         time = real(istart, wp) * dt
         
         ! Store previous velocities
@@ -159,6 +172,22 @@ program dns_3d
         ! Check divergence
         if (mod(istart, 50) == 0) then
             call check_divergence_3d(istart)
+        endif
+        
+        ! Complete step timing and update statistics
+        call cpu_time(step_end_time)
+        step_duration = step_end_time - step_start_time
+        
+        ! Update timing statistics
+        total_sim_time = total_sim_time + step_duration
+        min_step_time = min(min_step_time, step_duration)
+        max_step_time = max(max_step_time, step_duration)
+        avg_step_time = total_sim_time / real(istart, wp)
+        
+        ! Print timing summary every N steps
+        if (mod(istart, timing_interval) == 0) then
+            call print_step_timing(istart, step_duration, avg_step_time, &
+                                  min_step_time, max_step_time, max_divergence)
         endif
     end do
     
@@ -195,6 +224,7 @@ contains
     subroutine read_input_3d()
         implicit none
         integer :: nx_input, ny_input, nz_input
+        integer :: io_status  ! Local I/O status variable (avoids shadowing global nx)
         
         namelist /grid/ nx_input, ny_input, nz_input
         namelist /simulation/ re, dt, nsteps, xlen, ylen, viscous_scheme_name
@@ -211,8 +241,8 @@ contains
         target_pressure_gradient = 0.03_wp    ! Default pressure gradient (3.0/Re for Re=100)
         
         ! Try to read from 3D input file
-        open(7, file='input_3d.dat', status='old', iostat=nx)
-        if (nx == 0) then
+        open(7, file='input_3d.dat', status='old', iostat=io_status)
+        if (io_status == 0) then
             read(7, nml=grid)
             read(7, nml=simulation)
             read(7, nml=flow_control)
@@ -389,8 +419,8 @@ end subroutine setup_spectral_3d
         ! Fractional step arrays (physical dimensions)
         allocate(u_star(nx,ny,nz), v_star(nx,ny,nz), w_star(nx,ny,nz), phi(nx,ny,nz), stat=alloc_status)
         if (alloc_status /= 0) stop 'Error allocating fractional step arrays'
-        allocate(dphidx_p(nx,ny,nz), dphidy_p(nx,ny,nz), dphidz_p(nx,ny,nz), stat=alloc_status)
-        if (alloc_status /= 0) stop 'Error allocating previous pressure gradient arrays'
+        allocate(grad_p_prev_x(nx,ny,nz), grad_p_prev_y(nx,ny,nz), grad_p_prev_z(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating previous total pressure gradient arrays'
         
         ! Source terms (physical dimensions)
         allocate(su(nx,ny,nz), sv(nx,ny,nz), sw(nx,ny,nz), stat=alloc_status)
@@ -487,7 +517,7 @@ end subroutine setup_spectral_3d
         phi = 0.0_wp
         ! Initialize pressure gradient arrays to zero (following 2D implementation)
         ! This is crucial for proper Kim & Moin boundary conditions
-        dphidx_p = 0.0_wp; dphidy_p = 0.0_wp; dphidz_p = 0.0_wp
+        grad_p_prev_x = 0.0_wp; grad_p_prev_y = 0.0_wp; grad_p_prev_z = 0.0_wp
         
         write(*,'(A)') ' 3D flow fields initialized'
         write(*,'(A,F10.6)') ' Flow control: current pressure gradient = ', current_pressure_gradient
@@ -678,65 +708,13 @@ end subroutine setup_spectral_3d
         
         ! Solve the Helmholtz equation for each velocity component
         ! Note the minus sign, since BC is u* = -dt*∇p
-        call solve_viscous_helmholtz(u_star, rhs_u, theta, -dt * dphidx_p(:,:,1), -dt * dphidx_p(:,:,nz))
-        call solve_viscous_helmholtz(v_star, rhs_v, theta, -dt * dphidy_p(:,:,1), -dt * dphidy_p(:,:,nz))
-        call solve_viscous_helmholtz(w_star, rhs_w, theta, -dt * dphidz_p(:,:,1), -dt * dphidz_p(:,:,nz))
+        call solve_viscous_helmholtz(u_star, rhs_u, theta, -dt * grad_p_prev_x(:,:,1), -dt * grad_p_prev_x(:,:,nz))
+        call solve_viscous_helmholtz(v_star, rhs_v, theta, -dt * grad_p_prev_y(:,:,1), -dt * grad_p_prev_y(:,:,nz))
+        call solve_viscous_helmholtz(w_star, rhs_w, theta, -dt * grad_p_prev_z(:,:,1), -dt * grad_p_prev_z(:,:,nz))
         
         deallocate(rhs_u, rhs_v, rhs_w)
         
     end subroutine viscous_step_3d
-
-!============================================================================
-! SUBROUTINE: apply_constant_pressure_gradient_3d (DEPRECATED)
-!
-! PURPOSE:
-!   This subroutine was originally designed to apply constant pressure
-!   gradient forcing to the momentum equations.
-!
-! STATUS:
-!   DEPRECATED - Pressure gradient forcing is now applied in
-!   compute_source_terms_3d() following the 2D implementation pattern.
-!   This subroutine will be removed in future versions.
-!
-! REPLACEMENT:
-!   Flow control pressure forcing is now handled in compute_source_terms_3d()
-!   using the target_pressure_gradient parameter when flow_control_method = 1.
-!============================================================================
-    subroutine apply_constant_pressure_gradient_3d(rhs_u)
-        implicit none
-        real(wp), intent(inout) :: rhs_u(:,:,:)
-        
-        ! DEPRECATED: This subroutine is no longer called
-        ! Pressure gradient forcing now handled in compute_source_terms_3d()
-        write(*,'(A)') 'WARNING: apply_constant_pressure_gradient_3d() is deprecated'
-        
-    end subroutine apply_constant_pressure_gradient_3d
-
-!============================================================================
-! SUBROUTINE: apply_boundary_conditions_to_ustar (DEPRECATED)
-!
-! PURPOSE:
-!   This subroutine was originally designed to apply boundary conditions
-!   to the intermediate velocity field u* after the viscous step.
-!
-! STATUS:
-!   DEPRECATED - Boundary conditions are now applied directly within
-!   the Helmholtz solver for better numerical accuracy and efficiency.
-!   This subroutine will be removed in future versions.
-!
-! REPLACEMENT:
-!   Boundary conditions are now handled in solve_viscous_helmholtz()
-!   using Kim & Moin fractional step method with proper pressure BCs.
-!============================================================================
-    subroutine apply_boundary_conditions_to_ustar()
-        implicit none
-        integer :: i, j
-        
-        ! This subroutine is now DEPRECATED. The boundary conditions are applied
-        ! directly within the Helmholtz solver. This is left here as a record
-        ! of the change in methodology.
-        
-    end subroutine apply_boundary_conditions_to_ustar
 
 !============================================================================
 ! SUBROUTINE: add_explicit_diffusion
@@ -1191,8 +1169,8 @@ end subroutine setup_spectral_3d
         p_total = p_total + phi
 
         ! 4. Store the gradient of the NEW total pressure for the NEXT time step's BC
-        !    (Note: dphidx_p is now a misnomer, it should be dpdx_p)
-        call compute_derivatives_3d(p_total, dphidx_p, dphidy_p, dphidz_p)
+        !    (Variable names now correctly reflect total pressure gradients, not pressure correction)
+        call compute_derivatives_3d(p_total, grad_p_prev_x, grad_p_prev_y, grad_p_prev_z)
 
         deallocate(dphidx, dphidy, dphidz)
         
@@ -1430,12 +1408,55 @@ end subroutine setup_spectral_3d
         ! Correctly compute divergence: du/dx + dv/dy + dw/dz
         call compute_divergence_3d(div_field, u, v, w)
         div_max = maxval(abs(div_field))
+        
+        ! Update global divergence variable for timing correlation
+        max_divergence = div_max
 
         write(*,'(A,I6,A,E12.4)') ' Step ', istep, ', Max divergence: ', div_max
 
         deallocate(div_field)
         
     end subroutine check_divergence_3d
+
+!============================================================================
+! SUBROUTINE: print_step_timing
+!
+! PURPOSE:
+!   Prints timing statistics for the current timestep, including performance
+!   trends and correlation with divergence levels for debugging purposes.
+!
+! PARAMETERS:
+!   step         - Current timestep number
+!   current_time - Duration of current timestep (seconds)
+!   avg_time     - Average timestep duration (seconds)
+!   min_time     - Minimum timestep duration observed (seconds)
+!   max_time     - Maximum timestep duration observed (seconds)
+!   divergence   - Current maximum divergence value
+!============================================================================
+    subroutine print_step_timing(step, current_time, avg_time, min_time, max_time, divergence)
+        implicit none
+        integer, intent(in) :: step
+        real(wp), intent(in) :: current_time, avg_time, min_time, max_time, divergence
+        real(wp) :: performance_ratio, est_remaining_time
+        
+        ! Calculate performance trends
+        performance_ratio = current_time / avg_time
+        est_remaining_time = avg_time * real(nsteps - step, wp)
+        
+        write(*,'(A)') ' ================================='
+        write(*,'(A,I6)') ' TIMING SUMMARY - Step: ', step
+        write(*,'(A)') ' ================================='
+        write(*,'(A,F8.4,A)') ' Current step time: ', current_time, ' seconds'
+        write(*,'(A,F8.4,A)') ' Average step time: ', avg_time, ' seconds'
+        write(*,'(A,F8.4,A)') ' Min step time:     ', min_time, ' seconds'
+        write(*,'(A,F8.4,A)') ' Max step time:     ', max_time, ' seconds'
+        write(*,'(A,F6.2)')   ' Performance ratio: ', performance_ratio
+        write(*,'(A,E12.4)')  ' Max divergence:    ', divergence
+        write(*,'(A,F8.1,A)') ' Est. time remaining: ', est_remaining_time, ' seconds'
+        write(*,'(A)') ' ================================='
+        write(*,*)
+        
+    end subroutine print_step_timing
 
 !============================================================================
 ! SUBROUTINE: deallocate_arrays_3d
@@ -1466,7 +1487,7 @@ end subroutine setup_spectral_3d
         
         deallocate(u, v, w, p_total, un, vn, wn)
         deallocate(u_star, v_star, w_star, phi)
-        deallocate(dphidx_p, dphidy_p, dphidz_p)
+        deallocate(grad_p_prev_x, grad_p_prev_y, grad_p_prev_z)
         deallocate(su, sv, sw, ox, oy, oz)
         deallocate(work1, work2, work3, work4, work5, work6)
         deallocate(work7, work8, work9, work10, work11, work12)
