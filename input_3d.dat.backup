@@ -1,0 +1,19 @@
+&grid
+  nx_input = 64,
+  ny_input = 32, 
+  nz_input = 33
+/
+
+&simulationplea
+  re = 100.0,
+  dt = 0.001,
+  nsteps = 300,
+  xlen = 6.283185307179586,
+  ylen = 6.283185307179586,
+  viscous_scheme_name = 'crank-nicolson'
+/
+
+&flow_control
+  flow_control_method = 1,
+  target_pressure_gradient = 0.03
+/

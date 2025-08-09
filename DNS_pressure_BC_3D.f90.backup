@@ -48,19 +48,6 @@ program dns_3d
     real(wp) :: target_pressure_gradient  ! Target ∂p/∂x for method 1
     real(wp) :: current_pressure_gradient ! Dynamic forcing value used in calculations
     
-    ! Method 2 (PI controller) parameters
-    real(wp) :: target_bulk_velocity      ! Target U_bulk for method 2
-    real(wp) :: controller_gain           ! PI controller proportional gain
-    integer :: controller_update_freq     ! Update frequency (steps)
-    real(wp) :: bulk_velocity_error_integral ! Accumulated error for PI controller
-    real(wp) :: current_bulk_velocity     ! Current computed U_bulk
-    real(wp) :: bulk_velocity_error       ! Current error for controller
-    
-    ! =========================================================================
-    ! INPUT FILE CONTROL
-    ! =========================================================================
-    character(len=256) :: input_filename   ! Input file name (default or from command line)
-    
     ! =========================================================================
     ! 3D SPECTRAL ARRAYS
     ! =========================================================================
@@ -136,9 +123,6 @@ program dns_3d
     write(*,'(A)') '   Phase 1: Data Structure Implementation'
     write(*,'(A)') ' ============================================'
     
-    ! Process command line arguments for input file specification
-    call process_command_line_args()
-    
     ! Read input parameters
     call read_input_3d()
     
@@ -186,7 +170,7 @@ program dns_3d
         call apply_boundary_conditions_3d()
         
         ! Output diagnostics
-        if (mod(istart, nwrt) == 0) then
+        if (mod(istart, 100) == 0) then
             call output_diagnostics_3d(istart)
         endif
         
@@ -220,67 +204,6 @@ program dns_3d
 
 contains
 
-!============================================================================
-! SUBROUTINE: process_command_line_args
-!
-! PURPOSE:
-!   Processes command line arguments to determine the input file name.
-!   Supports the following usage patterns:
-!   - ./dns_3d_pressure_bc                    (uses default: input_3d.dat)
-!   - ./dns_3d_pressure_bc input_file.dat     (uses specified file)
-!   - ./dns_3d_pressure_bc --help            (shows usage)
-!
-! OUTPUTS:
-!   Sets global variable input_filename to the appropriate filename
-!============================================================================
-    subroutine process_command_line_args()
-        implicit none
-        integer :: num_args
-        character(len=256) :: arg
-        
-        ! Set default input filename
-        input_filename = 'input_3d.dat'
-        
-        ! Get number of command line arguments
-        num_args = command_argument_count()
-        
-        if (num_args == 0) then
-            ! No arguments - use default
-            write(*,'(A,A)') ' Using default input file: ', trim(input_filename)
-            
-        elseif (num_args == 1) then
-            ! One argument - either filename or --help
-            call get_command_argument(1, arg)
-            
-            if (trim(arg) == '--help' .or. trim(arg) == '-h') then
-                write(*,'(A)') ' '
-                write(*,'(A)') ' USAGE:'
-                write(*,'(A)') '   ./dns_3d_pressure_bc [input_file.dat] [--help]'
-                write(*,'(A)') ' '
-                write(*,'(A)') ' ARGUMENTS:'
-                write(*,'(A)') '   input_file.dat  : Specify input file (default: input_3d.dat)'
-                write(*,'(A)') '   --help, -h      : Show this help message'
-                write(*,'(A)') ' '
-                write(*,'(A)') ' EXAMPLES:'
-                write(*,'(A)') '   ./dns_3d_pressure_bc                     # Use input_3d.dat'
-                write(*,'(A)') '   ./dns_3d_pressure_bc input_3d_method2.dat # Use specified file'
-                write(*,'(A)') ' '
-                stop
-            else
-                ! Treat as filename
-                input_filename = trim(arg)
-                write(*,'(A,A)') ' Using specified input file: ', trim(input_filename)
-            endif
-            
-        else
-            ! Too many arguments
-            write(*,'(A)') ' ERROR: Too many command line arguments'
-            write(*,'(A)') ' Use --help for usage information'
-            stop
-        endif
-        
-    end subroutine process_command_line_args
-
     ! =========================================================================
     ! SETUP SUBROUTINES
     ! =========================================================================
@@ -303,7 +226,7 @@ contains
 !   - &time_control: istart, dt, nsteps, nwrt (time advancement and output)
 !   - &simulation: re, alpha, beta, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen, use_crank_nicolson
 !   - &output: iform, iles (output format controls)
-!   - &flow_control: flow_control_method, target_pressure_gradient, target_bulk_velocity, controller_gain, controller_update_freq
+!   - &flow_control: flow_control_method, target_pressure_gradient
 !============================================================================
     subroutine read_input_3d()
         implicit none
@@ -314,8 +237,7 @@ contains
         namelist /time_control/ istart, dt, nsteps, nwrt
         namelist /simulation/ re, alpha, beta, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen, use_crank_nicolson
         namelist /output/ iform, iles
-        namelist /flow_control/ flow_control_method, target_pressure_gradient, &
-                               target_bulk_velocity, controller_gain, controller_update_freq
+        namelist /flow_control/ flow_control_method, target_pressure_gradient
         
         ! Default values
         nx_input = 128; ny_input = 32; nz_input = 33
@@ -333,13 +255,8 @@ contains
         flow_control_method = 1                ! Default: constant pressure gradient
         target_pressure_gradient = 0.03_wp    ! Default pressure gradient (3.0/Re for Re=100)
         
-        ! Method 2 defaults (PI controller)
-        target_bulk_velocity = 1.0_wp         ! Default bulk velocity for method 2
-        controller_gain = 0.15_wp             ! Default PI controller gain
-        controller_update_freq = 7             ! Default update frequency
-        
-        ! Try to read from specified input file
-        open(7, file=trim(input_filename), status='old', iostat=io_status)
+        ! Try to read from 3D input file
+        open(7, file='input_3d.dat', status='old', iostat=io_status)
         if (io_status == 0) then
             read(7, nml=grid)
             read(7, nml=time_control)
@@ -347,9 +264,8 @@ contains
             read(7, nml=output)
             read(7, nml=flow_control)
             close(7)
-            write(*,'(A,A)') ' Input read from ', trim(input_filename)
+            write(*,'(A)') ' Input read from input_3d.dat'
         else
-            write(*,'(A,A)') ' WARNING: Could not open input file: ', trim(input_filename)
             write(*,'(A)') ' Using default parameters'
         endif
         
@@ -358,44 +274,21 @@ contains
         ! Initialize dynamic flow control values
         current_pressure_gradient = target_pressure_gradient
         
-        ! Initialize PI controller state variables
-        current_bulk_velocity = 0.0_wp
-        bulk_velocity_error = 0.0_wp
-        bulk_velocity_error_integral = 0.0_wp
-        
         ! ========================================================================
         ! PARAMETER VALIDATION - Check for physically reasonable values
         ! ========================================================================
-        if (flow_control_method /= 1 .and. flow_control_method /= 2) then
-            write(*,'(A,I0)') ' ERROR: Invalid flow_control_method, got ', flow_control_method
-            write(*,'(A)') ' Must be 1 (constant pressure gradient) or 2 (constant bulk velocity)'
-            stop
+        if (flow_control_method /= 1) then
+            write(*,'(A,I0)') ' Warning: Only flow_control_method=1 is currently supported, got ', flow_control_method
+            write(*,'(A)') ' Setting to method 1 (constant pressure gradient)'
+            flow_control_method = 1
         endif
         
-        ! Method 1 validation
-        if (flow_control_method == 1) then
-            if (abs(target_pressure_gradient) < 1.0e-12_wp) then
-                write(*,'(A)') ' Warning: Very small pressure gradient may not maintain flow'
-            endif
-            if (target_pressure_gradient < 0.0_wp) then
-                write(*,'(A)') ' Note: Negative pressure gradient will drive flow in -x direction'
-            endif
+        if (abs(target_pressure_gradient) < 1.0e-12_wp) then
+            write(*,'(A)') ' Warning: Very small pressure gradient may not maintain flow'
         endif
         
-        ! Method 2 validation
-        if (flow_control_method == 2) then
-            if (target_bulk_velocity <= 0.0_wp) then
-                write(*,'(A,F0.6)') ' ERROR: Target bulk velocity must be positive for Method 2, got ', target_bulk_velocity
-                stop
-            endif
-            if (controller_gain <= 0.0_wp) then
-                write(*,'(A,F0.6)') ' ERROR: Controller gain must be positive, got ', controller_gain
-                stop
-            endif
-            if (controller_update_freq <= 0) then
-                write(*,'(A,I0)') ' ERROR: Controller update frequency must be positive, got ', controller_update_freq
-                stop
-            endif
+        if (target_pressure_gradient < 0.0_wp) then
+            write(*,'(A)') ' Note: Negative pressure gradient will drive flow in -x direction'
         endif
         
         write(*,'(A,I0,A,I0,A,I0)') ' Grid: ', nx, '×', ny, '×', nz
@@ -408,13 +301,7 @@ contains
         write(*,'(A,F6.3,A,F6.3)') ' Wavenumbers: α=', alpha, ', β=', beta
         write(*,'(A,L1)') ' Use Crank-Nicolson: ', use_crank_nicolson
         write(*,'(A,I0)') ' Flow control method: ', flow_control_method
-        if (flow_control_method == 1) then
-            write(*,'(A,F10.6)') ' Target pressure gradient: ', target_pressure_gradient
-        else if (flow_control_method == 2) then
-            write(*,'(A,F10.6)') ' Target bulk velocity: ', target_bulk_velocity
-            write(*,'(A,F10.6)') ' Controller gain: ', controller_gain
-            write(*,'(A,I0)') ' Controller update frequency: ', controller_update_freq
-        endif
+        write(*,'(A,F10.6)') ' Target pressure gradient: ', target_pressure_gradient
         
     end subroutine read_input_3d
 
@@ -768,23 +655,17 @@ end subroutine setup_spectral_3d
 
         ! Apply flow control forcing (following 2D implementation)
         if (flow_control_method == 1) then
-            ! Method 1: Constant pressure gradient
             current_pressure_gradient = target_pressure_gradient
-        elseif (flow_control_method == 2) then
-            ! Method 2: PI controller for constant bulk velocity
-            ! Note: istart is the current step number in the main loop
-            call update_pressure_gradient_3d(istart)
-        endif
-        
-        ! Add pressure gradient to x-momentum (streamwise direction)
-        do k = 1, nz
-            do j = 1, ny
-                do i = 1, nx
-                    su(i,j,k) = su(i,j,k) + current_pressure_gradient
+            ! Add pressure gradient to x-momentum (streamwise direction)
+            do k = 1, nz
+                do j = 1, ny
+                    do i = 1, nx
+                        su(i,j,k) = su(i,j,k) + current_pressure_gradient
+                    end do
                 end do
             end do
-        end do
-        ! sv and sw remain unchanged (no y,z pressure gradients)
+            ! sv and sw remain unchanged (no y,z pressure gradients)
+        endif
 
         ! NO DEALLOCATION NEEDED - workspace arrays remain allocated for reuse
     end subroutine compute_source_terms_3d
@@ -1507,19 +1388,10 @@ end subroutine setup_spectral_3d
         ! Normalize by total domain volume to get mean kinetic energy density
         energy = energy / (xlen * ylen * ybar)
         
-        if (flow_control_method == 2) then
-            ! Calculate and display bulk velocity for Method 2
-            call calculate_bulk_velocity_3d(current_bulk_velocity)
-            write(*,'(A,I6,A,F8.5,A,5(ES12.4,A),F8.5,A)') &
-                ' Step ', istep, ', t=', time, &
-                ', |u|max=', umax, ', |v|max=', vmax, ', |w|max=', wmax, ', E=', energy, &
-                ', dP/dx=', current_pressure_gradient, ', U_bulk=', current_bulk_velocity
-        else
-            write(*,'(A,I6,A,F8.5,A,5(ES12.4,A))') &
-                ' Step ', istep, ', t=', time, &
-                ', |u|max=', umax, ', |v|max=', vmax, ', |w|max=', wmax, ', E=', energy, &
-                ', dP/dx=', current_pressure_gradient
-        endif
+        write(*,'(A,I6,A,F8.5,A,5(ES12.4,A))') &
+            ' Step ', istep, ', t=', time, &
+            ', |u|max=', umax, ', |v|max=', vmax, ', |w|max=', wmax, ', E=', energy, &
+            ', dP/dx=', current_pressure_gradient
             
     end subroutine output_diagnostics_3d
 
@@ -1770,115 +1642,6 @@ end subroutine setup_spectral_3d
             if (do_dy) deallocate(dfdy_hat, dfdy_slice)
         endif
     end subroutine compute_derivatives_3d
-
-!============================================================================
-! SUBROUTINE: calculate_bulk_velocity_3d
-!
-! PURPOSE:
-!   Calculates the bulk (volume-averaged) velocity for the 3D channel flow.
-!   This is used for Method 2 flow control (constant bulk velocity).
-!
-! INPUTS:
-!   u(nx,ny,nz) - x-velocity field
-!   
-! OUTPUTS:
-!   u_bulk - Volume-averaged velocity
-!
-! INTEGRATION:
-!   U_bulk = (1/Volume) * ∫∫∫ u(x,y,z) dx dy dz
-!   Where Volume = Lx * Ly * Lz, and integration uses:
-!   - Periodic spectral integration in x and y directions  
-!   - LGL quadrature weights in z direction
-!============================================================================
-    subroutine calculate_bulk_velocity_3d(u_bulk)
-        implicit none
-        real(wp), intent(out) :: u_bulk
-        real(wp) :: volume_integral, total_volume
-        integer :: i, j, k
-        
-        ! Initialize
-        volume_integral = 0.0_wp
-        total_volume = 0.0_wp
-        
-        ! Integrate over the entire 3D domain
-        ! In x and y: periodic, so simple averaging
-        ! In z: use LGL quadrature weights
-        do k = 1, nz
-            do j = 1, ny
-                do i = 1, nx
-                    ! Volume element: dx * dy * dz_weighted
-                    ! Since x,y are periodic: dx = xlen/nx, dy = ylen/ny
-                    ! For z: use LGL weights (zwts already normalized)
-                    volume_integral = volume_integral + u(i,j,k) * zwts(k)
-                    total_volume = total_volume + zwts(k)
-                end do
-            end do
-        end do
-        
-        ! Complete the integration
-        ! x and y are already averaged by summing over all points
-        ! Normalize by total number of x,y points and total z weight
-        u_bulk = volume_integral / (real(nx*ny, wp) * total_volume)
-        
-    end subroutine calculate_bulk_velocity_3d
-
-!============================================================================
-! SUBROUTINE: update_pressure_gradient_3d
-!
-! PURPOSE:
-!   Updates the pressure gradient using PI controller for Method 2 flow control.
-!   Adjusts the driving pressure gradient to maintain target bulk velocity.
-!
-! CONTROLLER EQUATION:
-!   ΔP/Δx = Kp * error + Ki * ∫error dt
-!   where error = U_target - U_current
-!
-! INPUTS:
-!   istep - Current time step number
-!   
-! SIDE EFFECTS:
-!   Updates current_pressure_gradient based on bulk velocity error
-!   Updates bulk_velocity_error_integral for next iteration
-!============================================================================
-    subroutine update_pressure_gradient_3d(istep)
-        implicit none
-        integer, intent(in) :: istep
-        real(wp) :: proportional_term, integral_term
-        real(wp) :: kp, ki  ! Controller gains
-        
-        ! Only update at specified frequency
-        if (mod(istep, controller_update_freq) /= 0) return
-        
-        ! Calculate current bulk velocity
-        call calculate_bulk_velocity_3d(current_bulk_velocity)
-        
-        ! Compute error
-        bulk_velocity_error = target_bulk_velocity - current_bulk_velocity
-        
-        ! PI controller gains (based on 2D implementation)
-        kp = controller_gain      ! Proportional gain
-        ki = controller_gain * 0.1_wp  ! Integral gain (10% of proportional)
-        
-        ! Compute PI terms
-        proportional_term = kp * bulk_velocity_error
-        integral_term = ki * bulk_velocity_error_integral
-        
-        ! Update pressure gradient
-        current_pressure_gradient = proportional_term + integral_term
-        
-        ! Clamp to reasonable bounds to prevent instability
-        if (current_pressure_gradient > 10.0_wp) then
-            current_pressure_gradient = 10.0_wp
-        elseif (current_pressure_gradient < -10.0_wp) then
-            current_pressure_gradient = -10.0_wp
-        endif
-        
-        ! Update integral term (accumulate error over time)
-        if (abs(bulk_velocity_error) > 1.0e-12_wp) then
-            bulk_velocity_error_integral = bulk_velocity_error_integral + bulk_velocity_error * dt
-        endif
-        
-    end subroutine update_pressure_gradient_3d
 
 
 end program dns_3d
