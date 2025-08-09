@@ -1,0 +1,49 @@
+# Makefile for 3D DNS with Native FFTW3 Implementation
+# Updated to use native FFTW3 real-to-complex transforms
+
+F90 = gfortran
+FFLAGS = -O3 -ffast-math -funroll-loops -g
+LIBS = -lfftw3 -llapack -lblas -lm
+
+# Include paths
+INCLUDES = -I/opt/homebrew/include
+# Library paths
+LIBPATHS = -L/opt/homebrew/lib
+
+# Source files (updated to use FFTW3)
+SRCS = lgl_module.f90 fftw3_dns_module.f90 DNS_pressure_BC_3D.f90
+# Object files
+OBJS = $(SRCS:.f90=.o)
+
+# Target executable
+TARGET = dns_3d_pressure_bc
+
+# Phony targets
+.PHONY: all clean run
+
+# Default target
+all: $(TARGET)
+
+# Link the executable
+# '$^' automatically uses the list of prerequisites (the object files)
+$(TARGET): $(OBJS)
+	$(F90) $(FFLAGS) $(LIBPATHS) -o $@ $^ $(LIBS)
+
+# Generic compilation rule for .f90 files
+# This rule will be used for any .o target that doesn't have an explicit rule.
+%.o: %.f90
+	$(F90) $(FFLAGS) $(INCLUDES) -c $< -o $@
+
+# Dependencies to enforce correct compilation order (updated for FFTW3)
+# By listing the .o files as prerequisites, we ensure the corresponding
+# .mod files are created before they are needed.
+DNS_pressure_BC_3D.o: fftw3_dns_module.o lgl_module.o
+fftw3_dns_module.o: # No dependencies (standalone FFTW3 module)
+
+# Clean
+clean:
+	rm -f *.o *.mod $(TARGET)
+
+# Run
+run: $(TARGET)
+	./$(TARGET)

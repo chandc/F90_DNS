@@ -1,0 +1,41 @@
+# Makefile for 3D DNS with Fractional Step Method
+F90 = gfortran
+FFLAGS = -O3 -ffast-math -funroll-loops -g
+LIBS = -lfftw3 -llapack -lblas
+
+# Include paths
+INCLUDES = -I/opt/homebrew/include
+
+# Library paths  
+LIBPATHS = -L/opt/homebrew/lib
+
+# Source files
+SRCS = lgl_module.f90 fft_module_2d.f90 dns_3d_fractional_step.f90
+
+# Object files
+OBJS = $(SRCS:.f90=.o)
+
+# Target executable
+TARGET = dns_3d_fractional_step
+
+# Build rules
+$(TARGET): $(OBJS)
+	$(F90) $(FFLAGS) $(LIBPATHS) -o $@ $(OBJS) $(LIBS)
+
+%.o: %.f90
+	$(F90) $(FFLAGS) $(INCLUDES) -c $<
+
+# Dependencies
+fft_module_2d.o: fft_module_2d.f90
+lgl_module.o: lgl_module.f90
+dns_3d_fractional_step.o: dns_3d_fractional_step.f90 lgl_module.o fft_module_2d.o
+
+# Clean
+clean:
+	rm -f *.o *.mod $(TARGET)
+
+# Run
+run: $(TARGET)
+	./$(TARGET)
+
+.PHONY: clean run

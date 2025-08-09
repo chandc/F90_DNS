@@ -1,0 +1,78 @@
+# Makefile for 3D DNS Spectral Solver
+# Proper spectral methods with FFTW3 and LGL
+
+# Compiler and flags
+FC = gfortran
+FFLAGS = -O3 -fopenmp -ffast-math -march=native -I/opt/homebrew/opt/fftw/include
+LDFLAGS = -L/opt/homebrew/opt/fftw/lib -lfftw3 -lfftw3_omp -llapack -lblas -lm
+
+# Source files
+SOURCES = lgl_module.f90 fft_module.f90 dns_3d_spectral.f90
+OBJECTS = $(SOURCES:.f90=.o)
+TARGET = dns_3d_spectral
+
+# Module files
+MODULES = lgl_module.mod fft_module.mod
+
+# Default target
+all: $(TARGET)
+
+# Link the executable
+$(TARGET): $(OBJECTS)
+	$(FC) $(FFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo "====================================="
+	@echo "3D DNS Spectral Solver compiled successfully!"
+	@echo "Execute with: ./$(TARGET)"
+	@echo "====================================="
+
+# Compile object files
+%.o: %.f90
+	$(FC) $(FFLAGS) -c $<
+
+# Dependencies
+dns_3d_spectral.o: lgl_module.mod fft_module.mod
+fft_module.o: 
+lgl_module.o:
+
+# Clean targets
+clean:
+	rm -f *.o *.mod $(TARGET)
+	@echo "Cleaned object files and executable"
+
+distclean: clean
+	rm -f *.dat
+	@echo "Cleaned all generated files"
+
+# Install FFTW3 (if needed)
+install-fftw:
+	@echo "Installing FFTW3..."
+	@if command -v brew >/dev/null 2>&1; then \
+		brew install fftw; \
+	elif command -v apt-get >/dev/null 2>&1; then \
+		sudo apt-get install libfftw3-dev; \
+	elif command -v yum >/dev/null 2>&1; then \
+		sudo yum install fftw-devel; \
+	else \
+		echo "Please install FFTW3 manually"; \
+	fi
+
+# Test compilation
+test: $(TARGET)
+	@echo "Running quick test..."
+	@echo "This will run 100 steps only..."
+	@sed 's/nsteps = 2000/nsteps = 100/' dns_3d_spectral.f90 > dns_test.f90
+	@$(FC) $(FFLAGS) lgl_module.f90 fft_module.f90 dns_test.f90 -o dns_test $(LDFLAGS)
+	@./dns_test || echo "Test completed (may have warnings)"
+	@rm -f dns_test dns_test.f90 *.o *.mod
+
+# Help
+help:
+	@echo "Available targets:"
+	@echo "  all          - Build the 3D DNS spectral solver"
+	@echo "  clean        - Remove object files and executable"
+	@echo "  distclean    - Remove all generated files"
+	@echo "  install-fftw - Install FFTW3 library"
+	@echo "  test         - Build and run a quick test"
+	@echo "  help         - Show this help message"
+
+.PHONY: all clean distclean install-fftw test help

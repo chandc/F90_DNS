@@ -8,26 +8,34 @@
 !   pressure boundary condition approach using iterative CGS solvers.
 !
 ! KEY FEATURES:
-!   • Spectral methods in streamwise (x) direction using FFT
+!   • Spectral methods in streamwise (x) direction using FFTW
 !   • Legendre-Gauss-Lobatto (LGL) collocation in wall-normal (z) direction  
-!   • Crank-Nicolson time integration for viscous terms
-!   • 4th-order Runge-Kutta for convective terms
+!   • Crank-Nicolson time integration for viscous terms (2nd order accurate)
+!   • 4th-order Runge-Kutta for convective terms (conventional form: -u·∇u)
 !   • Kim & Moin boundary conditions for viscous wall treatment
 !   • CGS iterative solver for pressure Poisson equation (F77-compatible)
 !   • Bottom-wall-only pressure pinning for zero mode stability
+!   • Dual flow control: Method 1 (constant ∂p/∂x) or Method 2 (constant U_bulk)
 !
 ! MATHEMATICAL FORMULATION:
 !   Incompressible Navier-Stokes equations in channel flow geometry:
 !   ∂u/∂t + u·∇u = -∇p + (1/Re)∇²u + f
 !   ∇·u = 0
 !
-!   Fractional step method:
-!   1. Momentum step: u* = u^n + dt*[RK4(convection) + CN(viscous)]
-!   2. Pressure step: ∇²φ = ∇·u*/dt  (Poisson equation)
-!   3. Projection step: u^{n+1} = u* - dt*∇φ
+!   Fractional step method with pressure correction:
+!   1. Convection step: Compute RK4 convective terms -u·∇u
+!   2. Viscous step: Solve (I - dt/(2Re)∇²)u* = u^n + dt*RHS (Crank-Nicolson)
+!   3. Pressure step: Solve ∇²φ = ∇·u*/dt with homogeneous Neumann BC
+!   4. Projection step: u^{n+1} = u* - dt*∇φ (ensures ∇·u^{n+1} = 0)
+!
+! NUMERICAL METHODS:
+!   • LGL quadrature: Exact integration of polynomials up to degree 2N-3
+!   • Spectral accuracy: Exponential convergence for smooth solutions
+!   • Galerkin formulation: Consistent mass matrix treatment for all modes
+!   • Dealiasing: 3/2 rule prevents aliasing errors in nonlinear terms
 !
 ! GRID CONFIGURATION:
-!   • nx = 128: Fourier modes in streamwise direction
+!   • nx = 128: Fourier modes in streamwise direction (periodic BC)
 !   • nz = 33:  LGL collocation points in wall-normal direction
 !   • nxpp = nx + 2: Padded grid for FFT efficiency
 !   • Periodic in x, no-slip walls at z = ±1
@@ -84,7 +92,6 @@ program channel_flow_solver
         ! Physical parameters (from /param/, /inputs/, /params/)
         real(wp) :: alpha, beta, re, ta, ybar, cgstol, cs, u00, wavlen
         real(wp) :: xlen, ylen, retau
-        real(wp) :: facvel, fact, fac1, fac2
         integer :: istart, nwrt, iform, iles, ntavg
         real(wp) :: omz  ! rotation parameter
         logical :: use_crank_nicolson  ! CN viscous step flag
@@ -130,6 +137,7 @@ program channel_flow_solver
         real(wp) :: target_bulk_velocity      ! Target U_bulk for method 2
         real(wp) :: current_pressure_gradient ! Dynamic forcing value
         real(wp) :: controller_gain           ! PI controller proportional gain
+        real(wp) :: bulk_velocity_error_integral ! Accumulated error for positional PI
         integer :: controller_update_freq     ! Update frequency (steps)
         
         ! Statistics for monitoring
@@ -138,7 +146,7 @@ program channel_flow_solver
     end type navier_stokes_params
     
     type(navier_stokes_params) :: p
-    integer :: istep_local, i
+    integer :: istep_local
     ! Note: pressure_gradient is now dynamic, set in p%current_pressure_gradient
     real(wp) :: u_max, u_rms, w_max, w_rms  ! Velocity statistics
     real(wp) :: div_max, div_rms  ! Divergence statistics
@@ -157,14 +165,10 @@ program channel_flow_solver
         call setup_grid_and_matrices(p)
         call initialize_flow_fields(p)
         p%t = 0.0_wp
-        p%fac1 = 1.0_wp
-        p%fac2 = 0.0_wp
     else
         call setup_grid_and_matrices(p)
         call initialize_flow_fields(p)  ! This allocates arrays
         call restart_from_file(p)       ! This reads into allocated arrays
-        p%fac1 = 1.5_wp
-        p%fac2 = -0.5_wp
     endif
     
     write(*,'(A,F8.1,A,F8.5)') '  Re = ', p%re, ', dt = ', p%dt
@@ -186,9 +190,6 @@ program channel_flow_solver
         
         ! 4-stage Runge-Kutta convection step - NOW ENABLED
         call convection_step(p)
-        
-        p%fac1 = 1.5_wp
-        p%fac2 = -0.5_wp
         
         ! Build momentum source terms including convection and forcing
         ! The RK4 convection step has updated p%su and p%sw with convective terms
@@ -354,9 +355,6 @@ contains
         ! Compute derived parameters
         p%alpha = pi2 / p%xlen
         p%retau = p%re
-        p%fact = 2.0_wp / p%dt
-        p%facvel = p%fact * p%re
-        
         write(*,'(A,F10.6)') ' alpha = ', p%alpha
         write(*,'(A,F8.3)') ' u00/vel ratio = ', p%u00
         write(*,'(A,F8.3)') ' Wavelength = ', p%wavlen
@@ -603,6 +601,54 @@ contains
         p%current_pressure_gradient = target_pressure_gradient
         p%current_bulk_velocity = 0.0_wp
         p%bulk_velocity_error = 0.0_wp
+        p%bulk_velocity_error_integral = 0.0_wp
+        
+        ! ========================================================================
+        ! PARAMETER VALIDATION - Check for physically reasonable values
+        ! ========================================================================
+        if (p%re <= 0.0_wp) then
+            write(*,'(A,F0.3)') ' ERROR: Reynolds number must be positive, got Re = ', p%re
+            stop
+        endif
+        if (p%dt <= 0.0_wp) then
+            write(*,'(A,F0.6)') ' ERROR: Time step must be positive, got dt = ', p%dt
+            stop
+        endif
+        if (p%nsteps <= 0) then
+            write(*,'(A,I0)') ' ERROR: Number of time steps must be positive, got nsteps = ', p%nsteps
+            stop
+        endif
+        if (nx < 4 .or. nz < 4) then
+            write(*,'(A,I0,A,I0)') ' ERROR: Grid dimensions too small, need nx≥4, nz≥4, got nx=', nx, ', nz=', nz
+            stop
+        endif
+        if (p%alpha <= 0.0_wp) then
+            write(*,'(A,F0.6)') ' ERROR: Streamwise wavenumber must be positive, got alpha = ', p%alpha
+            stop
+        endif
+        
+        ! Warn about potentially problematic values
+        if (p%dt > 0.1_wp) then
+            write(*,'(A,F0.6)') ' WARNING: Large time step may cause instability, dt = ', p%dt
+        endif
+        if (p%re > 10000.0_wp) then
+            write(*,'(A,F0.1)') ' WARNING: Very high Reynolds number, ensure adequate resolution, Re = ', p%re
+        endif
+        
+        ! Flow control parameter validation
+        if (p%flow_control_method < 1 .or. p%flow_control_method > 2) then
+            write(*,'(A,I0)') ' ERROR: Invalid flow control method, must be 1 or 2, got ', p%flow_control_method
+            stop
+        endif
+        if (p%flow_control_method == 2) then
+            if (p%target_bulk_velocity <= 0.0_wp) then
+                write(*,'(A,F0.6)') ' ERROR: Target bulk velocity must be positive for Method 2, got ', p%target_bulk_velocity
+                stop
+            endif
+            if (p%controller_gain <= 0.0_wp) then
+                write(*,'(A,F0.6)') ' WARNING: Controller gain should be positive for stability, got ', p%controller_gain
+            endif
+        endif
         
         ! Print read values for verification
         write(*,'(A)') ' Successfully read namelist parameters:'
@@ -678,8 +724,8 @@ contains
     subroutine initialize_flow_fields(p)
         implicit none
         type(navier_stokes_params), intent(inout) :: p
-        integer :: i, j, k, idx
-        real(wp) :: z_coord, u_theoretical
+        integer :: i, k, idx
+        real(wp) :: z_coord
         
         ! Allocate flow field arrays
         allocate(p%u(ntot), p%w(ntot), p%temp(ntot))
@@ -799,9 +845,41 @@ contains
     ! SUBROUTINE: runge_kutta_convection
     !
     ! PURPOSE:
-    !   4th-order Runge-Kutta integration of convective terms
+    !   4th-order Runge-Kutta integration of convective terms in Navier-Stokes equations
     !
-    ! DESCRIPTION:
+    ! MATHEMATICAL FORMULATION:
+    !   Convective terms in conservative form: -u·∇u = -(u∂u/∂x + w∂u/∂z)
+    !   For momentum equation: ∂u/∂t + u·∇u = -∇p + (1/Re)∇²u
+    !
+    !   Standard RK4 scheme for ∂u/∂t = f(u,t):
+    !   k₁ = f(uⁿ, tⁿ)
+    !   k₂ = f(uⁿ + ½Δt·k₁, tⁿ + ½Δt)  
+    !   k₃ = f(uⁿ + ½Δt·k₂, tⁿ + ½Δt)
+    !   k₄ = f(uⁿ + Δt·k₃, tⁿ + Δt)
+    !   uⁿ⁺¹ = uⁿ + (Δt/6)(k₁ + 2k₂ + 2k₃ + k₄)
+    !
+    ! SPECTRAL IMPLEMENTATION:
+    !   • Derivatives computed in spectral space (exact differentiation)
+    !   • Nonlinear products computed in physical space (exact multiplication)
+    !   • 3/2-rule dealiasing prevents aliasing errors
+    !   • Boundary conditions enforced after each RK stage
+    !
+    ! NUMERICAL ACCURACY:
+    !   • 4th-order temporal accuracy: O(Δt⁴) truncation error
+    !   • Spectral spatial accuracy: O(exp(-cN)) for smooth solutions
+    !   • Stable for CFL ≤ 2.8 (theoretical limit for RK4)
+    !
+    ! PERFORMANCE CONSIDERATIONS:
+    !   • FFT transforms dominate computational cost
+    !   • Memory bandwidth critical for large 3D arrays
+    !   • OpenMP parallelization of loops over wavenumbers
+    !
+    ! INPUTS:
+    !   p - Current velocity field and solver parameters
+    !
+    ! OUTPUTS:
+    !   p - Convective source terms (su, sw) for momentum equations
+    !============================================================================
     !   Implements explicit RK4 time stepping for nonlinear convection:
     !   - Stage 1: k₁ = f(u^n)
     !   - Stage 2: k₂ = f(u^n + Δt/2·k₁)  
@@ -828,31 +906,16 @@ contains
     subroutine runge_kutta_convection(p)
         implicit none
         type(navier_stokes_params), intent(inout) :: p
-        integer :: irk, i, k
-        real(wp) :: alf, z_coord
+        integer :: irk, i
+        real(wp) :: alf
         
         ! Working arrays for derivatives and nonlinear terms
         real(wp), dimension(ntot) :: dudx, dudz, dwdx, dwdz
-        real(wp), dimension(ntot) :: uu, uw, ww
-        real(wp), dimension(ntot) :: ubar_temp
         real(wp), dimension(ntot) :: conv_u, conv_w  ! Final convective terms
         
         ! Store initial values
         p%un = p%u
         p%wn = p%w
-        
-        ! Initialize base flow profile (parabolic channel flow profile)
-        do i = 1, ntot
-            k = (i-1) / nxpp + 1  ! z-index
-            if (k <= nz) then
-                z_coord = p%zpts(k-1)  ! Get LGL coordinate (0-indexed array)
-                ! Parabolic profile: ubar = U_max * (1 - z^2) where U_max = 3/2 * U_bulk  
-                ! For non-dimensional case: U_bulk = 1.0, U_max = 1.5
-                ubar_temp(i) = 1.0_wp * (1.0_wp - z_coord**2)  ! Non-dimensional base flow
-            else
-                ubar_temp(i) = 0.0_wp
-            endif
-        end do
         
         ! Initialize convective terms
         conv_u = 0.0_wp
@@ -884,11 +947,11 @@ contains
             
             ! Compute convective terms in physical space
             do i = 1, ntot
-                ! u-momentum convection: -u∂u/∂x - w∂u/∂z - ubar∂u/∂x
-                p%su(i) = -(p%u(i) + ubar_temp(i))*dudx(i) - p%w(i)*dudz(i)
+                ! u-momentum convection: -u∂u/∂x - w∂u/∂z (conventional Navier-Stokes)
+                p%su(i) = -p%u(i)*dudx(i) - p%w(i)*dudz(i)
                 
-                ! w-momentum convection: -u∂w/∂x - w∂w/∂z - ubar∂w/∂x
-                p%sw(i) = -(p%u(i) + ubar_temp(i))*dwdx(i) - p%w(i)*dwdz(i)
+                ! w-momentum convection: -u∂w/∂x - w∂w/∂z (conventional Navier-Stokes)
+                p%sw(i) = -p%u(i)*dwdx(i) - p%w(i)*dwdz(i)
             end do
             
             ! Transform back to spectral space
@@ -942,9 +1005,8 @@ contains
                 
                 do j = 1, nz
                     idx2 = (j-1)*nxpp + i
-                    if (k <= nzm .and. j <= nzm) then
-                        dfdz(idx) = dfdz(idx) + p%d(k-1,j-1) * field(idx2) * (2.0_wp / p%ybar)
-                    endif
+                    ! Use full LGL differentiation matrix (consistent with wall shear stress calculation)
+                    dfdz(idx) = dfdz(idx) + p%d(k-1,j-1) * field(idx2) * (2.0_wp / p%ybar)
                 end do
             end do
         end do
@@ -1137,18 +1199,6 @@ contains
         end do
         
     end subroutine compute_z_derivatives_2d
-    
-    subroutine build_momentum_sources(p)
-        implicit none
-        type(navier_stokes_params), intent(inout) :: p
-        integer :: ijk
-        
-        do ijk = 1, ntot
-            p%su(ijk) = (p%u(ijk) + p%su(ijk)) * p%re / p%dt
-            p%sw(ijk) = (p%w(ijk) + p%sw(ijk)) * p%re / p%dt
-        end do
-        
-    end subroutine build_momentum_sources
     
     !============================================================================
     ! SUBROUTINE: solve_helmholtz_system
@@ -1418,8 +1468,44 @@ contains
     !
     ! SPECTRAL METHOD:
     !   - Each Fourier mode solved independently
-    !   - Direct matrix inversion for wall-normal direction
-    !   - High accuracy from spectral differentiation
+    !============================================================================
+    ! SUBROUTINE: solve_pressure_step
+    !
+    ! PURPOSE:
+    !   Solve pressure Poisson equation with homogeneous Neumann boundary conditions
+    !   using spectral Galerkin formulation for accurate pressure correction.
+    !
+    ! MATHEMATICAL FORMULATION:
+    !   Pressure Poisson equation: ∇²φ = ∇·u*/dt
+    !   Where φ is pressure correction and u* is intermediate velocity.
+    !
+    !   In spectral space (Fourier in x, LGL in z):
+    !   (∂²/∂z² - kₓ²)φ̂ = (∇·u*)ˆ for each Fourier mode kₓ
+    !
+    ! GALERKIN FORMULATION:
+    !   For consistent spectral accuracy, the weak form is:
+    !   ∫ ψⱼ(∂²φ̂/∂z² - kₓ²φ̂) dz = ∫ ψⱼ(∇·u*)ˆ dz
+    !
+    !   Using LGL basis functions ψⱼ and quadrature:
+    !   Σᵢ φ̂ᵢ ∫ ψⱼ(∂²ψᵢ/∂z² - kₓ²ψᵢ) dz = ∫ ψⱼ(∇·u*)ˆ dz
+    !
+    !   Matrix form: [D²ᵢⱼ - kₓ²Mᵢⱼ]φ̂ⱼ = RHSᵢ
+    !   Where Mᵢⱼ is the mass matrix: Mᵢⱼ = ∫ ψᵢψⱼ dz = wᵢδᵢⱼ (diagonal)
+    !
+    ! BOUNDARY CONDITIONS:
+    !   Homogeneous Neumann: ∂φ/∂z|walls = 0 (natural BC in Galerkin)
+    !   Pressure pinning: φ(z₁) = 0 for kₓ=0 mode to fix integration constant
+    !
+    ! NUMERICAL IMPLEMENTATION:
+    !   - LGL spectral differentiation matrix D for ∂²/∂z²
+    !   - Exact quadrature using LGL weights wᵢ for mass matrix
+    !   - Consistent treatment: RHS scaled by mass matrix for all modes
+    !   - Direct matrix solve using LAPACK DGESV
+    !
+    ! CONVERGENCE PROPERTIES:
+    !   - Spectral accuracy: O(exp(-cN)) for smooth solutions
+    !   - Galerkin consistency ensures optimal convergence rates
+    !   - Mass matrix scaling critical for high-accuracy pressure gradients
     !
     ! INPUTS:
     !   p - Solver state with intermediate velocity u*
@@ -1649,7 +1735,7 @@ contains
         real(wp), intent(in) :: phi_spectral(nxhp, nz)
         real(wp), allocatable :: dphidx_spectral(:,:), dphidz_spectral(:,:)
         real(wp), allocatable :: dphidx(:), dphidz(:)
-        integer :: i, ix, k, idx
+        integer :: ix, k
         
         allocate(dphidx_spectral(nxhp, nz), dphidz_spectral(nxhp, nz))
         allocate(dphidx(ntot), dphidz(ntot))
@@ -1738,21 +1824,6 @@ contains
         end do
         
     end function compute_second_derivative_element
-    
-    ! Helper to compute x-derivatives in complex spectral space
-    subroutine compute_x_derivatives_complex(p, field_complex)
-        implicit none
-        type(navier_stokes_params), intent(in) :: p
-        complex(wp), intent(inout) :: field_complex(nxhp, nz)
-        integer :: i, k
-        
-        do k = 1, nz
-            do i = 1, nxhp
-                field_complex(i,k) = (0.0_wp, 1.0_wp) * p%xw(i) * field_complex(i,k)
-            end do
-        end do
-        
-    end subroutine compute_x_derivatives_complex
     
     ! Project initial velocity field to be divergence-free
     subroutine project_velocity_to_divergence_free(p)
@@ -1888,9 +1959,14 @@ contains
         
         ! Find maximum divergence
         div_max = maxval(abs(p%su))
-        if (div_max > 1.0e-6_wp) then
-            write(*,'(A,ES12.4,A)') ' WARNING: Largest absolute divergence = ', div_max, ' exceeds 10^-6 tolerance!'
-            write(*,'(A)') '          This indicates violation of incompressible flow constraint.'
+        if (div_max > 1.0e-4_wp) then
+            write(*,'(A,ES12.4,A)') ' ERROR: Severe divergence violation = ', div_max, ' exceeds 10^-4!'
+            write(*,'(A)') '        Simulation may be unstable. Consider reducing time step or checking boundary conditions.'
+            write(*,'(A)') '        Stopping simulation to prevent corrupted results.'
+            stop
+        else if (div_max > 1.0e-6_wp) then
+            write(*,'(A,ES12.4,A)') ' WARNING: Divergence = ', div_max, ' exceeds 10^-6 tolerance.'
+            write(*,'(A)') '          This indicates minor violation of incompressible flow constraint.'
         endif
         
     end subroutine check_divergence
@@ -2022,27 +2098,48 @@ contains
     ! SUBROUTINE: calculate_velocity_statistics
     !
     ! PURPOSE:
-    !   Calculate velocity statistics for validation
+    !   Calculate velocity statistics using high-accuracy LGL quadrature integration
     !
-    ! DESCRIPTION:
-    !   Computes centerline and bulk velocities using proper LGL integration
-    !   for comparison with theoretical Poiseuille flow values.
+    ! MATHEMATICAL FOUNDATION:
+    !   Bulk velocity: U_bulk = (1/H) ∫₋ₕ^H u(z) dz = (1/2) ∫₋₁^1 u(ζ) dζ
+    !   Where ζ = z/h is the normalized coordinate and H is half-channel height.
+    !
+    !   LGL Quadrature Formula:
+    !   ∫₋₁^1 f(ζ) dζ ≈ Σᵢ₌₀^N wᵢ f(ζᵢ)
+    !   Where ζᵢ are LGL nodes and wᵢ are LGL weights.
+    !
+    !   This quadrature is EXACT for polynomials of degree ≤ 2N-3, providing
+    !   spectral accuracy that matches the DNS solver's numerical precision.
+    !
+    ! NUMERICAL ACCURACY:
+    !   - LGL quadrature: Spectral accuracy O(exp(-cN)) for smooth functions
+    !   - Consistency: Uses same quadrature weights as DNS momentum equations
+    !   - High precision: Essential for accurate flow control in Method 2
+    !
+    ! IMPLEMENTATION NOTES:
+    !   - Spanwise averaging: Removes 3D effects, focuses on mean 2D profile
+    !   - Padding point exclusion: Only integrates physical domain points
+    !   - Weight normalization: Accounts for coordinate transformation [-1,1] → [-h,h]
+    !
+    ! VALIDATION:
+    !   For Poiseuille flow: U_bulk = (2/3) * U_centerline (theoretical)
+    !   High-accuracy integration ensures this relation holds to machine precision.
     !
     ! INPUTS:
-    !   p - Navier-Stokes parameter structure
+    !   p - Navier-Stokes parameter structure with current velocity field
     !
     ! OUTPUTS:
-    !   u_centerline - Maximum velocity (at channel center)
-    !   u_bulk       - Bulk velocity (integrated average)
+    !   u_centerline - Maximum velocity (occurs at channel center z=0)
+    !   u_bulk       - Volume-averaged bulk velocity using LGL quadrature
     !============================================================================
     subroutine calculate_velocity_statistics(p, u_centerline, u_bulk)
         implicit none
         type(navier_stokes_params), intent(in) :: p
         real(wp), intent(out) :: u_centerline, u_bulk
         
-        real(wp), dimension(nz) :: u_avg_profile, lgl_weights
-        integer :: i, k, idx, count_x, center_idx
-        real(wp) :: weight_sum
+        real(wp), dimension(nz) :: u_avg_profile
+        integer :: i, k, idx, count_x
+        real(wp) :: integral_u
         
         ! Compute spanwise-averaged velocity profile
         do k = 1, nz
@@ -2059,25 +2156,15 @@ contains
         ! Find centerline velocity (maximum)
         u_centerline = maxval(u_avg_profile)
         
-        ! Compute LGL integration weights (trapezoidal approximation)
+        ! Calculate bulk velocity using proper LGL quadrature
+        ! Compute the integral of u(z) over z from -1 to 1 using LGL quadrature weights
+        integral_u = 0.0_wp
         do k = 1, nz
-            if (k == 1) then
-                lgl_weights(k) = (p%zpts(1) - p%zpts(0)) / 2.0_wp
-            else if (k == nz) then
-                lgl_weights(k) = (p%zpts(nz-1) - p%zpts(nz-2)) / 2.0_wp
-            else
-                lgl_weights(k) = (p%zpts(k) - p%zpts(k-2)) / 2.0_wp
-            endif
+            integral_u = integral_u + u_avg_profile(k) * p%wg(k-1)
         end do
         
-        ! Calculate bulk velocity using proper LGL integration
-        u_bulk = 0.0_wp
-        weight_sum = 0.0_wp
-        do k = 1, nz
-            u_bulk = u_bulk + u_avg_profile(k) * lgl_weights(k)
-            weight_sum = weight_sum + lgl_weights(k)
-        end do
-        u_bulk = u_bulk / weight_sum
+        ! Bulk velocity is the integral divided by the channel height (H=2 for z in [-1,1])
+        u_bulk = integral_u / 2.0_wp
         
     end subroutine calculate_velocity_statistics
 
@@ -2088,7 +2175,7 @@ contains
         real(wp) :: tau_wall_bottom, tau_wall_top
         real(wp) :: du_dz_bottom, du_dz_top
         real(wp) :: tau_theory_bottom, tau_theory_top
-        real(wp) :: u_avg_bottom, u_avg_top, u_centerline, u_bulk
+        real(wp) :: u_centerline, u_bulk
         real(wp) :: error_bottom, error_top
         
         ! Debug: Check if subroutine is called
@@ -2256,11 +2343,11 @@ contains
         
         ! Local arrays
         real(wp) :: r(nx), p(nx), q(nx), apn(nx), diag(nx), sum_vec(nx)
-        real(wp) :: small, factor
+        real(wp) :: small
         real(wp) :: res0, res1, resfac, qdr, pdapn, qdrnew, alfa, beta
         integer :: i, j, iter, nxy
         
-        parameter (small = 1.0e-30_wp, factor = 1.0e-3_wp)
+        parameter (small = 1.0e-30_wp)
         
         info = 0
         nxy = nx * ny
@@ -2370,10 +2457,38 @@ contains
     ! SUBROUTINE: apply_flow_control
     !
     ! PURPOSE:
-    !   Unified interface for applying flow control (constant pressure or volume)
+    !   Unified interface for flow control in channel DNS simulations
     !
-    ! DESCRIPTION:
-    !   Routes to appropriate flow control method based on user selection
+    ! FLOW CONTROL METHODS:
+    !   Method 1 - Constant Pressure Gradient:
+    !     ∂p/∂x = constant (typically for developing flows)
+    !     Bulk velocity varies with time as flow evolves
+    !     Simple and robust for transient simulations
+    !
+    !   Method 2 - Constant Bulk Velocity (Recommended):
+    !     U_bulk = constant (physiologically relevant)
+    !     ∂p/∂x adjusted dynamically using PI controller
+    !     Maintains constant mass flow rate
+    !
+    ! PI CONTROLLER THEORY (Method 2):
+    !   Error: e(t) = U_target - U_measured(t)
+    !   Control law: ∂p/∂x = ∂p/∂x_theory + Kp*e(t) + Ki*∫e(τ)dτ
+    !   
+    !   Where ∂p/∂x_theory = 12μU_bulk/h² for Poiseuille flow provides
+    !   the theoretical base value for optimal convergence.
+    !
+    ! IMPLEMENTATION DETAILS:
+    !   - High-accuracy bulk velocity measurement using LGL quadrature
+    !   - Positional PI controller (not incremental) for stability
+    !   - Theoretical base pressure gradient reduces controller effort
+    !   - Update frequency balances stability vs computational cost
+    !
+    ! INPUTS:
+    !   p      - Solver parameters and state
+    !   istep  - Current time step for controller scheduling
+    !
+    ! OUTPUTS:
+    !   p - Updated pressure gradient for momentum equations
     !============================================================================
     subroutine apply_flow_control(p, istep)
         implicit none
@@ -2443,38 +2558,56 @@ contains
     end subroutine apply_dynamic_pressure_gradient
 
     !============================================================================
-    ! SUBROUTINE: update_flow_controller
+    ! SUBROUTINE: update_flow_controller (with Anti-Windup)
     !
     ! PURPOSE:
-    !   PI controller to maintain constant bulk velocity
+    !   PI controller to maintain constant bulk velocity with enhanced stability
+    !   and anti-windup logic to prevent integral term saturation.
+    !
+    ! ANTI-WINDUP STRATEGY:
+    !   Conditional integration prevents integral accumulation when controller
+    !   output is saturated/clamped, eliminating overshoot and improving stability.
     !============================================================================
     subroutine update_flow_controller(p)
         implicit none
         type(navier_stokes_params), intent(inout) :: p
         
+        real(wp) :: kp, ki
         real(wp) :: proportional_term, integral_term
-        real(wp), parameter :: ki_factor = 0.001_wp ! Very small integral gain to minimize overshoot
-        
+        real(wp) :: pressure_gradient_unclamped, pressure_gradient_clamped
+        real(wp), parameter :: ki_ratio = 0.05_wp ! Ratio of Ki to Kp, can be tuned
+
         ! Calculate current bulk velocity
         call calculate_bulk_velocity(p, p%current_bulk_velocity)
-        
+
         ! Calculate error
         p%bulk_velocity_error = p%target_bulk_velocity - p%current_bulk_velocity
-        
-        ! --- CORRECTED PI CONTROLLER LOGIC (INCREMENTAL FORM) ---
-        
-        ! Proportional term with reduced gain to approach Method 1 result
-        proportional_term = 0.05_wp * p%bulk_velocity_error
-        
-        ! Integral term should be based on the CURRENT error and the timestep,
-        ! representing the contribution of this single step to the integral.
-        integral_term = (ki_factor * p%controller_gain) * p%bulk_velocity_error * p%dt
-        
-        ! Update the pressure gradient by adding the small increments
-        p%current_pressure_gradient = p%current_pressure_gradient + proportional_term + integral_term
-        
-        ! Safety limits (anti-windup)
-        p%current_pressure_gradient = max(0.0_wp, min(10.0_wp, p%current_pressure_gradient))
+
+        ! --- Positional PI Controller with Anti-Windup Logic ---
+
+        ! 1. Define controller gains from the input file
+        kp = p%controller_gain
+        ki = ki_ratio * p%controller_gain
+
+        ! 2. Calculate the Proportional and a *provisional* Integral term
+        proportional_term = kp * p%bulk_velocity_error
+        integral_term = ki * p%bulk_velocity_error_integral
+
+        ! 3. Calculate the new pressure gradient before applying safety limits
+        pressure_gradient_unclamped = (3.0_wp / p%re) + proportional_term + integral_term
+
+        ! 4. Apply safety limits (clamping)
+        pressure_gradient_clamped = max(0.0_wp, min(10.0_wp, pressure_gradient_unclamped))
+
+        ! 5. Conditionally update the integral (ANTI-WINDUP)
+        !    Only accumulate error if the controller is NOT saturated/clamped.
+        !    This prevents the integral term from growing uncontrollably.
+        if (abs(pressure_gradient_clamped - pressure_gradient_unclamped) < 1.0e-12_wp) then
+            p%bulk_velocity_error_integral = p%bulk_velocity_error_integral + p%bulk_velocity_error * p%dt
+        endif
+
+        ! 6. Set the final pressure gradient to the clamped value
+        p%current_pressure_gradient = pressure_gradient_clamped
         
     end subroutine update_flow_controller
 

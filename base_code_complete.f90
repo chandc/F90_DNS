@@ -720,30 +720,16 @@ contains
         implicit none
         type(navier_stokes_params), intent(inout) :: p
         integer :: irk, i, k
-        real(wp) :: alf, z_coord
+        real(wp) :: alf
         
         ! Working arrays for derivatives and nonlinear terms
         real(wp), dimension(ntot) :: dudx, dudz, dwdx, dwdz
         real(wp), dimension(ntot) :: uu, uw, ww
-        real(wp), dimension(ntot) :: ubar_temp
         real(wp), dimension(ntot) :: conv_u, conv_w  ! Final convective terms
         
         ! Store initial values
         p%un = p%u
         p%wn = p%w
-        
-        ! Initialize base flow profile (parabolic channel flow profile)
-        do i = 1, ntot
-            k = (i-1) / nxpp + 1  ! z-index
-            if (k <= nz) then
-                z_coord = p%zpts(k-1)  ! Get LGL coordinate (0-indexed array)
-                ! Parabolic profile: ubar = U_max * (1 - z^2) where U_max = 3/2 * U_bulk  
-                ! For Re=180, typical bulk velocity gives U_max ≈ 90
-                ubar_temp(i) = 60.0_wp * (1.0_wp - z_coord**2)  ! Base flow profile
-            else
-                ubar_temp(i) = 0.0_wp
-            endif
-        end do
         
         ! Initialize convective terms
         conv_u = 0.0_wp
@@ -775,11 +761,11 @@ contains
             
             ! Compute convective terms in physical space
             do i = 1, ntot
-                ! u-momentum convection: -u∂u/∂x - w∂u/∂z - ubar∂u/∂x
-                p%su(i) = -(p%u(i) + ubar_temp(i))*dudx(i) - p%w(i)*dudz(i)
+                ! u-momentum convection: -u∂u/∂x - w∂u/∂z (conventional Navier-Stokes)
+                p%su(i) = -p%u(i)*dudx(i) - p%w(i)*dudz(i)
                 
-                ! w-momentum convection: -u∂w/∂x - w∂w/∂z - ubar∂w/∂x
-                p%sw(i) = -(p%u(i) + ubar_temp(i))*dwdx(i) - p%w(i)*dwdz(i)
+                ! w-momentum convection: -u∂w/∂x - w∂w/∂z (conventional Navier-Stokes)
+                p%sw(i) = -p%u(i)*dwdx(i) - p%w(i)*dwdz(i)
             end do
             
             ! Transform back to spectral space

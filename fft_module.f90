@@ -80,21 +80,21 @@ module fft_module
             type(c_ptr), value :: plan
         end subroutine
         
-        ! Initialize threads
-        function fftw_init_threads() bind(C, name='fftw_init_threads')
-            import :: c_int
-            integer(c_int) :: fftw_init_threads
-        end function
+        ! Initialize threads (disabled)
+        ! function fftw_init_threads() bind(C, name='fftw_init_threads')
+        !     import :: c_int
+        !     integer(c_int) :: fftw_init_threads
+        ! end function
         
-        ! Set number of threads
-        subroutine fftw_plan_with_nthreads(nthreads) bind(C, name='fftw_plan_with_nthreads')
-            import :: c_int
-            integer(c_int), value :: nthreads
-        end subroutine
+        ! Set number of threads (disabled)
+        ! subroutine fftw_plan_with_nthreads(nthreads) bind(C, name='fftw_plan_with_nthreads')
+        !     import :: c_int
+        !     integer(c_int), value :: nthreads
+        ! end subroutine
         
-        ! Cleanup threads
-        subroutine fftw_cleanup_threads() bind(C, name='fftw_cleanup_threads')
-        end subroutine
+        ! Cleanup threads (disabled)
+        ! subroutine fftw_cleanup_threads() bind(C, name='fftw_cleanup_threads')
+        ! end subroutine
     end interface
     
     ! FFT plan storage
@@ -112,35 +112,26 @@ contains
     ! =========================================================================
     subroutine initialize_fft_threading(num_threads)
         integer, intent(in), optional :: num_threads
-        integer(c_int) :: iret, nthreads
+        integer :: nthreads
         
-        ! Initialize FFTW threads
-        iret = fftw_init_threads()
-        if (iret == 0) then
-            write(*,*) 'Warning: FFTW threading initialization failed'
-            return
-        endif
-        
-        ! Set number of threads
+        ! Set number of threads (for informational purposes only)
         if (present(num_threads)) then
             nthreads = num_threads
         else
-            nthreads = 4  ! Default
+            nthreads = 1  ! Single-threaded
         endif
         
-        call fftw_plan_with_nthreads(nthreads)
-        write(*,'(A,I0,A)') 'FFTW initialized with ', nthreads, ' threads'
+        write(*,'(A,I0,A)') 'FFTW initialized (single-threaded), requested ', nthreads, ' threads'
         
     end subroutine initialize_fft_threading
-    
+
     ! =========================================================================
     ! CLEANUP FFTW THREADING
     ! =========================================================================
     subroutine cleanup_fft_threading()
-        call fftw_cleanup_threads()
-    end subroutine cleanup_fft_threading
-    
-    ! =========================================================================
+        ! No cleanup needed for single-threaded version
+        write(*,*) 'FFTW cleanup completed'
+    end subroutine cleanup_fft_threading    ! =========================================================================
     ! SETUP FFT PLANS FOR POISSON SOLVER
     ! =========================================================================
     subroutine setup_fft_plans(plans, nx, ny, sample_real, sample_complex)

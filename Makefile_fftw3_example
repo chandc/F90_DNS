@@ -1,0 +1,35 @@
+# Makefile for FFTW3 2D Example
+# Demonstrates native FFTW3 usage with Fortran
+
+# Compiler and flags
+FC = gfortran
+FFLAGS = -O3 -Wall -std=f2008 -fbacktrace -I/opt/homebrew/include
+LDFLAGS = -L/opt/homebrew/lib -lfftw3 -lm
+
+# Target executable
+TARGET = fftw3_2d_example
+SOURCE = fftw3_2d_example.f90
+
+# Build rules
+$(TARGET): $(SOURCE)
+	$(FC) $(FFLAGS) -o $(TARGET) $(SOURCE) $(LDFLAGS)
+
+# Clean rule
+clean:
+	rm -f $(TARGET) *.mod *.o
+
+# Test rule
+test: $(TARGET)
+	./$(TARGET)
+
+.PHONY: clean test
+
+# Installation notes:
+# On macOS with Homebrew:
+#   brew install fftw
+#
+# On Ubuntu/Debian:
+#   sudo apt-get install libfftw3-dev
+#
+# On CentOS/RHEL:
+#   sudo yum install fftw3-devel

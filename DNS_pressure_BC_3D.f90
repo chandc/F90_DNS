@@ -1,0 +1,1605 @@
+!===============================================================================
+!
+! DNS_PRESSURE_BC_3D.F90 - 3D DNS Solver with Pressure Boundary Conditions
+!
+! PURPOSE: Full 3D extension of the 2D DNS solver
+!
+! EXTENSIONS FROM 2D:
+!   • Added y-direction (spanwise) with FFT
+!   • Extended to 3D grid: nx×ny×nz (128×32×33)
+!   • Added v-velocity component
+!   • 3D wavenumber arrays (kx, ky)
+!   • 3D boundary conditions
+!   • 3D indexing: idx = ((k-1)*nypp + j-1)*nxpp + i
+!
+!===============================================================================
+
+program dns_3d
+    use lgl_module
+    use fftw3_dns_module
+    use iso_fortran_env, only: wp => real64
+    implicit none
+    
+    character(len=20) :: viscous_scheme_name
+    
+    ! =========================================================================
+    ! 3D GRID PARAMETERS
+    ! =========================================================================
+    integer :: nx, ny, nz  ! Grid dimensions (EXTENDED: added ny)
+    integer :: nxpp, nypp, nxh, nyh, nxhp, nxf, nyf, ntot, nzm
+    integer :: istart, iend, nsteps
+    
+    ! =========================================================================
+    ! 3D PHYSICAL PARAMETERS
+    ! =========================================================================
+    real(wp) :: alpha, beta, re, ybar, dt, time
+    real(wp) :: xlen, ylen  ! Domain lengths (EXTENDED: added ylen)
+    real(wp), parameter :: pi = 4.0_wp * atan(1.0_wp)
+    
+    ! =========================================================================
+    ! FLOW CONTROL PARAMETERS (following 2D implementation pattern)
+    ! =========================================================================
+    integer :: flow_control_method        ! 1=constant pressure gradient, 2=constant bulk velocity
+    real(wp) :: target_pressure_gradient  ! Target ∂p/∂x for method 1
+    real(wp) :: current_pressure_gradient ! Dynamic forcing value used in calculations
+    
+    ! =========================================================================
+    ! 3D SPECTRAL ARRAYS
+    ! =========================================================================
+    ! Wave numbers (EXTENDED: added y-direction)
+    real(wp), allocatable :: xw(:), xsq(:)  ! x-direction wavenumbers
+    real(wp), allocatable :: yw(:), ysq(:)  ! y-direction wavenumbers (NEW)
+    
+    ! LGL quadrature (z-direction)
+    real(wp), allocatable :: zpts(:), zwts(:)
+    real(wp), allocatable :: d1(:,:), d2(:,:)
+    
+    ! =========================================================================
+    ! 3D FLOW FIELDS (EXTENDED: added v-component) - REFACTORED TO 3D ARRAYS
+    ! =========================================================================
+    real(wp), allocatable :: u(:,:,:), v(:,:,:), w(:,:,:)    ! Current velocities
+    real(wp), allocatable :: un(:,:,:), vn(:,:,:), wn(:,:,:) ! Previous velocities
+    real(wp), allocatable :: p_total(:,:,:)                ! Total Pressure
+    
+    ! FRACTIONAL STEP METHOD ARRAYS
+    real(wp), allocatable :: u_star(:,:,:), v_star(:,:,:), w_star(:,:,:)  ! Intermediate velocities
+    real(wp), allocatable :: phi(:,:,:)                           ! Pressure correction
+    real(wp), allocatable :: dphidx_p(:,:,:), dphidy_p(:,:,:), dphidz_p(:,:,:) ! Previous pressure gradient
+    
+    ! =========================================================================
+    ! 3D SOURCE TERMS (EXTENDED: added sv)
+    ! =========================================================================
+    real(wp), allocatable :: su(:,:,:), sv(:,:,:), sw(:,:,:)  ! Source terms
+    
+    ! =========================================================================
+    ! 3D SCRATCH ARRAYS (EXTENDED: added oy)
+    ! =========================================================================
+    real(wp), allocatable :: ox(:,:,:), oy(:,:,:), oz(:,:,:)  ! Original scratch arrays
+    
+    ! Additional workspace arrays for performance optimization (Phase 1)
+    real(wp), allocatable :: work1(:,:,:), work2(:,:,:), work3(:,:,:)
+    real(wp), allocatable :: work4(:,:,:), work5(:,:,:), work6(:,:,:)
+    real(wp), allocatable :: work7(:,:,:), work8(:,:,:), work9(:,:,:)
+    real(wp), allocatable :: work10(:,:,:), work11(:,:,:), work12(:,:,:)
+    
+    ! =========================================================================
+    ! 3D BOUNDARY CONDITIONS (EXTENDED)
+    ! =========================================================================
+    real(wp), allocatable :: uw1(:,:), vw1(:,:), ww1(:,:)  ! Wall 1
+    real(wp), allocatable :: uw2(:,:), vw2(:,:), ww2(:,:)  ! Wall 2
+    
+    ! =========================================================================
+    ! 3D FFT WORKSPACE (EXTENDED: added y-direction)
+    ! =========================================================================
+    real(wp), allocatable :: work_x(:), work_y(:)  ! FFT workspace (EXTENDED: added work_y)
+    
+    ! FFT PLANS FOR NATIVE FFTW3 2D FFT MODULE
+    type(fftw3_dns_plans) :: plans
+    real(wp), allocatable :: sample_real(:,:)
+    complex(wp), allocatable :: sample_complex(:,:)
+    
+    ! =========================================================================
+    ! MAIN PROGRAM
+    ! =========================================================================
+    
+    write(*,'(A)') ' ============================================'
+    write(*,'(A)') '   3D DNS SOLVER - CHANNEL FLOW'
+    write(*,'(A)') '   Phase 1: Data Structure Implementation'
+    write(*,'(A)') ' ============================================'
+    
+    ! Read input parameters
+    call read_input_3d()
+    
+    ! Setup grid and spectral methods
+    call setup_grid_3d()
+    call setup_spectral_3d()
+    
+    ! Allocate arrays
+    call allocate_arrays_3d()
+    
+    ! Initialize fields
+    call initialize_fields_3d()
+    
+    ! Check initial divergence
+    call check_divergence_3d(0)
+    
+    ! Setup boundary conditions
+    call setup_boundary_conditions_3d()
+    
+    ! Main time loop
+    write(*,'(A)') ' Starting main time integration...'
+    do istart = 1, nsteps
+        time = real(istart, wp) * dt
+        
+        ! Store previous velocities
+        un = u; vn = v; wn = w
+        
+        ! FRACTIONAL STEP METHOD
+        
+        ! Step 1: Compute nonlinear terms
+        call compute_source_terms_3d()
+        
+        ! Step 2: Viscous step - advance velocity without pressure
+        call viscous_step_3d()
+        
+        ! Step 3: Pressure step - solve for pressure correction
+        call solve_pressure_3d()
+        
+        ! Step 4: Projection step - apply pressure correction
+        call pressure_correction_3d()
+        
+        ! Apply boundary conditions
+        call apply_boundary_conditions_3d()
+        
+        ! Output diagnostics
+        if (mod(istart, 100) == 0) then
+            call output_diagnostics_3d(istart)
+        endif
+        
+        ! Check divergence
+        if (mod(istart, 50) == 0) then
+            call check_divergence_3d(istart)
+        endif
+    end do
+    
+    write(*,'(A)') ' Time integration completed successfully!'
+    write(*,'(A)') ' ============================================'
+    
+    ! Cleanup
+    call deallocate_arrays_3d()
+
+contains
+
+    ! =========================================================================
+    ! SETUP SUBROUTINES
+    ! =========================================================================
+
+!============================================================================
+! SUBROUTINE: read_input_3d
+!
+! PURPOSE:
+!   Reads all input parameters from the input file for the 3D DNS solver,
+!   including grid dimensions, physical parameters, time stepping settings,
+!   and flow control configuration.
+!
+! ROLE IN THE SOLVER:
+!   This is the first subroutine called during initialization. It reads
+!   namelists from the input file and sets up all global parameters needed
+!   for the DNS simulation.
+!
+! NAMELISTS READ:
+!   - &grid: nx, ny, nz (grid dimensions)
+!   - &params: re, dt, nsteps, theta (physical and numerical parameters)
+!   - &flow_control: flow_control_method, target_pressure_gradient
+!============================================================================
+    subroutine read_input_3d()
+        implicit none
+        integer :: nx_input, ny_input, nz_input
+        
+        namelist /grid/ nx_input, ny_input, nz_input
+        namelist /simulation/ re, dt, nsteps, xlen, ylen, viscous_scheme_name
+        namelist /flow_control/ flow_control_method, target_pressure_gradient
+        
+        ! Default values
+        nx_input = 128; ny_input = 32; nz_input = 33
+        re = 10000.0_wp; dt = 0.001_wp; nsteps = 1000
+        xlen = 2.0_wp * pi; ylen = 2.0_wp * pi
+        viscous_scheme_name = 'crank-nicolson'
+        
+        ! Flow control defaults
+        flow_control_method = 1                ! Default: constant pressure gradient
+        target_pressure_gradient = 0.03_wp    ! Default pressure gradient (3.0/Re for Re=100)
+        
+        ! Try to read from 3D input file
+        open(7, file='input_3d.dat', status='old', iostat=nx)
+        if (nx == 0) then
+            read(7, nml=grid)
+            read(7, nml=simulation)
+            read(7, nml=flow_control)
+            close(7)
+            write(*,'(A)') ' Input read from input_3d.dat'
+        else
+            write(*,'(A)') ' Using default parameters'
+        endif
+        
+        nx = nx_input; ny = ny_input; nz = nz_input
+        
+        ! Initialize dynamic flow control values
+        current_pressure_gradient = target_pressure_gradient
+        
+        ! ========================================================================
+        ! PARAMETER VALIDATION - Check for physically reasonable values
+        ! ========================================================================
+        if (flow_control_method /= 1) then
+            write(*,'(A,I0)') ' Warning: Only flow_control_method=1 is currently supported, got ', flow_control_method
+            write(*,'(A)') ' Setting to method 1 (constant pressure gradient)'
+            flow_control_method = 1
+        endif
+        
+        if (abs(target_pressure_gradient) < 1.0e-12_wp) then
+            write(*,'(A)') ' Warning: Very small pressure gradient may not maintain flow'
+        endif
+        
+        if (target_pressure_gradient < 0.0_wp) then
+            write(*,'(A)') ' Note: Negative pressure gradient will drive flow in -x direction'
+        endif
+        
+        write(*,'(A,I0,A,I0,A,I0)') ' Grid: ', nx, '×', ny, '×', nz
+        write(*,'(A,F10.1)') ' Reynolds number: ', re
+        write(*,'(A,F8.5)') ' Time step: ', dt
+        write(*,'(A,I0)') ' Number of steps: ', nsteps
+        write(*,'(A,F8.4,A,F8.4)') ' Domain: Lx=', xlen, ', Ly=', ylen
+        write(*,'(A,I0)') ' Flow control method: ', flow_control_method
+        write(*,'(A,F10.6)') ' Target pressure gradient: ', target_pressure_gradient
+        
+    end subroutine read_input_3d
+
+!============================================================================
+! SUBROUTINE: setup_grid_3d
+!
+! PURPOSE:
+!   Computes derived grid parameters and sets up the computational grid
+!   for the 3D spectral DNS solver, including padded dimensions and
+!   spectral space parameters.
+!
+! ROLE IN THE SOLVER:
+!   Called after reading input parameters to establish grid dimensions
+!   needed for FFT operations and memory allocation.
+!
+! GRID PARAMETERS COMPUTED:
+!   - nxpp, nypp: Padded dimensions for dealiasing (nx+2, ny+2)
+!   - nxh, nyh: Half dimensions for spectral operations
+!   - nxhp: Real-to-complex FFT dimension (nx/2 + 1)
+!   - dx, dy, dz: Grid spacing in each direction
+!============================================================================
+    subroutine setup_grid_3d()
+        implicit none
+        
+        ! Compute derived grid parameters
+        nxpp = nx + 2; nypp = ny + 2
+        nxh = nx/2; nyh = ny/2
+        nxhp = nxh + 1  ! For real-to-complex FFT: nx/2 + 1 complex coefficients
+        ! y-direction uses full ny dimension for 2D R2C FFT (no nyhp needed)
+        nxf = 3*nx/2 + 1; nyf = 3*ny/2 + 1
+        ntot = nxpp*nypp*nz; nzm = nz - 1
+        
+        ! Setup fundamental wavenumbers
+        alpha = 2.0_wp * pi / xlen
+        beta = 2.0_wp * pi / ylen  ! NEW: y-direction wavenumber
+        ybar = 2.0_wp              ! z-domain length [-1, 1]
+        
+        write(*,'(A,I0)') ' Total 3D grid points: ', ntot
+        write(*,'(A,F12.6)') ' Alpha (x-wavenumber): ', alpha
+        write(*,'(A,F12.6)') ' Beta (y-wavenumber): ', beta
+        write(*,'(A,F12.6)') ' ybar (z-domain length): ', ybar
+        
+    end subroutine setup_grid_3d
+
+!============================================================================
+! SUBROUTINE: setup_spectral_3d
+!
+! PURPOSE:
+!   Initializes spectral space arrays and wavenumber grids for the 3D
+!   spectral DNS solver, setting up the foundation for FFT operations
+!   and spectral differentiation.
+!
+! ROLE IN THE SOLVER:
+!   Establishes the spectral framework by computing wavenumber arrays
+!   (kx, ky) and squared wavenumber matrices (ksqr) needed for spectral
+!   operations throughout the simulation.
+!
+! SPECTRAL ARRAYS INITIALIZED:
+!   - kx, ky: Wavenumber arrays for x and y directions
+!   - ksqr: Total squared wavenumber matrix (kx² + ky²)
+!   - Spectral space work arrays for FFT operations
+!============================================================================
+subroutine setup_spectral_3d()
+    implicit none
+    integer :: i, j
+    
+    ! Allocate spectral arrays
+    ! For 2D real-to-complex FFT: x-direction gives nxhp=nx/2+1 complex coefficients
+    ! y-direction uses full ny dimension with proper frequency ordering
+    allocate(xw(nxhp), xsq(nxhp), yw(ny), ysq(ny))
+    allocate(zpts(nz), zwts(nz), d1(nz,nz), d2(nz,nz))
+    
+    ! X-direction wavenumbers (standard for real-to-complex FFT)
+    do i = 1, nxhp
+        xw(i) = real(i-1, wp) * alpha
+        xsq(i) = xw(i)**2
+    end do
+    
+    ! Y-direction wavenumbers for 2D real-to-complex FFT
+    ! FFTW3 2D R2C requires the complete frequency spectrum including negative frequencies
+    ! Layout: [0, 1, 2, ..., ny/2, -(ny/2-1), ..., -2, -1] for even ny
+    ! This ensures proper spectral differentiation and transforms
+    do j = 1, ny
+        if (j <= ny/2 + 1) then
+            yw(j) = real(j-1, wp) * beta  ! Positive frequencies: 0, 1, 2, ..., ny/2
+        else
+            yw(j) = real(j-1-ny, wp) * beta  ! Negative frequencies: -ny/2+1, ..., -1
+        endif
+        ysq(j) = yw(j)**2
+    end do
+    
+    ! Z-direction LGL quadrature
+    call lgl_nodes_weights(nz, zpts, zwts)
+    call differentiation_matrix(nz, zpts, d1)
+    d2 = matmul(d1, d1)
+    
+    write(*,'(A)') ' Spectral methods initialized'
+    write(*,'(A,F8.4)') ' Max x-wavenumber: ', xw(nxhp)
+    write(*,'(A,F8.4)') ' Max y-wavenumber: ', yw(ny/2+1)  ! Correct: Nyquist frequency
+    write(*,'(A,F8.4,A,F8.4)') ' Z-range: ', minval(zpts), ' to ', maxval(zpts)
+    write(*,'(A,F8.4)') ' Min zpts diff: ', minval(zpts(2:nz) - zpts(1:nz-1))
+    
+end subroutine setup_spectral_3d
+
+!============================================================================
+! SUBROUTINE: allocate_arrays_3d
+!
+! PURPOSE:
+!   Allocates all dynamic arrays needed for the 3D DNS simulation,
+!   including velocity fields, pressure, source terms, and spectral
+!   workspace arrays.
+!
+! ROLE IN THE SOLVER:
+!   Memory allocation is performed after grid setup to ensure all
+!   array dimensions are properly defined. This subroutine allocates
+!   both physical and spectral space arrays.
+!
+! ARRAYS ALLOCATED:
+!   - Velocity fields: u, v, w (current and intermediate)
+!   - Pressure: p and pressure correction arrays
+!   - Source terms: su, sv, sw (current and previous time steps)
+!   - Spectral workspace: for FFT operations and derivatives
+!   - LGL quadrature: weights and nodes for z-direction
+!============================================================================
+    subroutine allocate_arrays_3d()
+        implicit none
+        integer :: alloc_status
+        
+        ! Flow fields (physical dimensions)
+        allocate(u(nx,ny,nz), v(nx,ny,nz), w(nx,ny,nz), p_total(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating velocity fields'
+        
+        allocate(un(nx,ny,nz), vn(nx,ny,nz), wn(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating velocity storage'
+        
+        ! Fractional step arrays (physical dimensions)
+        allocate(u_star(nx,ny,nz), v_star(nx,ny,nz), w_star(nx,ny,nz), phi(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating fractional step arrays'
+        allocate(dphidx_p(nx,ny,nz), dphidy_p(nx,ny,nz), dphidz_p(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating previous pressure gradient arrays'
+        
+        ! Source terms (physical dimensions)
+        allocate(su(nx,ny,nz), sv(nx,ny,nz), sw(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating source terms'
+        
+        ! Scratch arrays (physical dimensions)
+        allocate(ox(nx,ny,nz), oy(nx,ny,nz), oz(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating scratch arrays'
+        
+        ! Additional workspace arrays for performance optimization (Phase 1)
+        allocate(work1(nx,ny,nz), work2(nx,ny,nz), work3(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating workspace arrays 1-3'
+        allocate(work4(nx,ny,nz), work5(nx,ny,nz), work6(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating workspace arrays 4-6'
+        allocate(work7(nx,ny,nz), work8(nx,ny,nz), work9(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating workspace arrays 7-9'
+        allocate(work10(nx,ny,nz), work11(nx,ny,nz), work12(nx,ny,nz), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating workspace arrays 10-12'
+        
+        ! Boundary conditions (physical dimensions)
+        allocate(uw1(nx,ny), vw1(nx,ny), ww1(nx,ny), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating boundary arrays 1'
+        
+        allocate(uw2(nx,ny), vw2(nx,ny), ww2(nx,ny), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating boundary arrays 2'
+        
+        ! FFT workspace (padded dimensions)
+        allocate(work_x(nxf), work_y(nyf), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating FFT workspace'
+        
+        ! FFT plans for native FFTW3 2D FFT
+        allocate(sample_real(nx, ny), sample_complex(nxhp, ny), stat=alloc_status)
+        if (alloc_status /= 0) stop 'Error allocating FFT samples'
+        
+        call setup_fftw3_plans_dns(plans, nx, ny, sample_real, sample_complex)
+        
+        write(*,'(A)') ' All 3D arrays allocated successfully'
+        
+    end subroutine allocate_arrays_3d
+
+!============================================================================
+! SUBROUTINE: initialize_fields_3d
+!
+! PURPOSE:
+!   Initializes all velocity and pressure fields with appropriate initial
+!   conditions for the 3D DNS simulation, including setting up the initial
+!   flow state and applying boundary conditions.
+!
+! ROLE IN THE SOLVER:
+!   Sets up the initial flow field that will be evolved by the time-stepping
+!   algorithm. This includes initializing velocity components and ensuring
+!   the initial field satisfies boundary conditions.
+!
+! INITIALIZATION OPTIONS:
+!   - Fully developed channel flow profile in streamwise direction
+!   - Zero initial conditions for cross-stream components
+!   - Pressure field initialized to zero (corrected from previous linear gradient)
+!   - Application of flow control parameters if enabled
+!============================================================================
+    subroutine initialize_fields_3d()
+        implicit none
+        integer :: i, j, k
+        real(wp) :: x, y, z, pert
+        
+        ! Initialize with Poiseuille profile + perturbations
+        do k = 1, nz
+            z = zpts(k)
+            do j = 1, ny
+                y = real(j-1, wp) * ylen / real(ny, wp)
+                do i = 1, nx
+                    x = real(i-1, wp) * xlen / real(nx, wp)
+                    
+                    ! Base Poiseuille flow
+                    u(i,j,k) = 1.5_wp * (1.0_wp - z**2)
+                    v(i,j,k) = 0.0_wp  ! NEW: initialized spanwise velocity
+                    w(i,j,k) = 0.0_wp
+                    ! Initialize pressure field to zero (following 2D implementation)
+                    p_total(i,j,k) = 0.0_wp
+                    
+                    ! Perturbations removed to test decay of fully-developed flow
+                    ! pert = 0.01_wp * (sin(alpha*x)*cos(beta*y) + cos(alpha*x)*sin(beta*y))
+                    ! u(i,j,k) = u(i,j,k) + pert * exp(-z**2)
+                    ! v(i,j,k) = v(i,j,k) + 0.5_wp * pert * sin(alpha*x) * exp(-z**2)  ! NEW
+                    ! w(i,j,k) = w(i,j,k) + 0.1_wp * pert * cos(alpha*x) * exp(-z**2)
+                end do
+            end do
+        end do
+        
+        ! Initialize previous time level
+        un = u; vn = v; wn = w
+        
+        ! Initialize fractional step arrays
+        u_star = 0.0_wp; v_star = 0.0_wp; w_star = 0.0_wp
+        phi = 0.0_wp
+        ! Initialize pressure gradient arrays to zero (following 2D implementation)
+        ! This is crucial for proper Kim & Moin boundary conditions
+        dphidx_p = 0.0_wp; dphidy_p = 0.0_wp; dphidz_p = 0.0_wp
+        
+        write(*,'(A)') ' 3D flow fields initialized'
+        write(*,'(A,F10.6)') ' Flow control: current pressure gradient = ', current_pressure_gradient
+        
+    end subroutine initialize_fields_3d
+
+!============================================================================
+! SUBROUTINE: setup_boundary_conditions_3d
+!
+! PURPOSE:
+!   Establishes boundary condition matrices and parameters for the 3D DNS
+!   solver, specifically implementing no-slip conditions at the channel walls
+!   using the Kim & Moin fractional step method.
+!
+! ROLE IN THE SOLVER:
+!   Sets up the boundary condition infrastructure needed for the Helmholtz
+!   solvers and pressure correction step. This includes defining boundary
+!   condition types for each velocity component.
+!
+! BOUNDARY CONDITIONS IMPLEMENTED:
+!   - No-slip conditions: u = v = w = 0 at z = ±1 (channel walls)
+!   - Periodic conditions: Applied implicitly in x,y via FFT
+!   - Kim & Moin formulation: Proper treatment of pressure boundary conditions
+!============================================================================
+    subroutine setup_boundary_conditions_3d()
+        implicit none
+        integer :: i, j
+        
+        ! No-slip boundary conditions at walls
+        do j = 1, ny
+            do i = 1, nx
+                ! Wall 1 (z = -1)
+                uw1(i,j) = 0.0_wp
+                vw1(i,j) = 0.0_wp  ! NEW: spanwise velocity BC
+                ww1(i,j) = 0.0_wp
+                
+                ! Wall 2 (z = +1)
+                uw2(i,j) = 0.0_wp
+                vw2(i,j) = 0.0_wp  ! NEW: spanwise velocity BC
+                ww2(i,j) = 0.0_wp
+            end do
+        end do
+        
+        write(*,'(A)') ' 3D boundary conditions set'
+        
+    end subroutine setup_boundary_conditions_3d
+    
+    ! =========================================================================
+    ! TIME STEPPING SUBROUTINES
+    ! =========================================================================
+
+!============================================================================
+! SUBROUTINE: compute_source_terms_3d
+!
+! PURPOSE:
+!   Computes the nonlinear source terms for the Navier-Stokes equations
+!   using the rotational form: u × (∇ × u), which is often more stable
+!   than the standard convective form u·∇u.
+!
+! ROLE IN THE SOLVER:
+!   This is the core computational routine that calculates the nonlinear
+!   terms needed for time advancement. It also applies flow control
+!   (pressure forcing) when enabled.
+!
+! NUMERICAL METHOD:
+!   1. Compute velocity derivatives using spectral differentiation
+!   2. Calculate vorticity: ω = ∇ × u
+!   3. Compute cross product: u × ω to get source terms
+!   4. Apply flow control pressure gradient if enabled
+!
+! FLOW CONTROL:
+!   Adds target_pressure_gradient to u-momentum equation when
+!   flow_control_method = 1 (pressure-driven flow)
+!============================================================================
+    subroutine compute_source_terms_3d()
+        implicit none
+        ! Computes the nonlinear terms using the rotational form: u x (nabla x u)
+        ! This form is often more stable than the standard convective form u.nabla(u)
+        !
+        ! PERFORMANCE OPTIMIZATION (Phase 1):
+        ! Uses pre-allocated workspace arrays instead of local allocation/deallocation
+        ! This eliminates major performance bottleneck in the time loop
+        integer :: i, j, k
+        
+        ! Use workspace arrays instead of local allocation (PERFORMANCE CRITICAL)
+        ! work1-work9 map to: ux, uy, uz, vx, vy, vz, wx, wy, wz
+        ! work10-work12 map to: omega_x, omega_y, omega_z
+
+        ! 1. Compute all velocity derivatives efficiently
+        call compute_derivatives_3d(u, work1, work2, work3)  ! ux, uy, uz
+        call compute_derivatives_3d(v, work4, work5, work6)  ! vx, vy, vz  
+        call compute_derivatives_3d(w, work7, work8, work9)  ! wx, wy, wz
+
+        ! 2. Compute vorticity components (omega = curl(u))
+        ! omega_x = dw/dy - dv/dz
+        ! omega_y = du/dz - dw/dx
+        ! omega_z = dv/dx - du/dy
+        work10 = work8 - work6   ! omega_x = wy - vz
+        work11 = work3 - work7   ! omega_y = uz - wx
+        work12 = work4 - work2   ! omega_z = vx - uy
+
+        ! 3. Compute nonlinear terms in rotational form: S = u x omega
+        ! The other term from the vector identity, grad(0.5*|u|^2), is a gradient
+        ! and can be absorbed into the pressure term.
+        do k = 1, nz
+            do j = 1, ny
+                do i = 1, nx
+                    su(i,j,k) = v(i,j,k) * work12(i,j,k) - w(i,j,k) * work11(i,j,k)  ! v*omega_z - w*omega_y
+                    sv(i,j,k) = w(i,j,k) * work10(i,j,k) - u(i,j,k) * work12(i,j,k)  ! w*omega_x - u*omega_z
+                    sw(i,j,k) = u(i,j,k) * work11(i,j,k) - v(i,j,k) * work10(i,j,k)  ! u*omega_y - v*omega_x
+                end do
+            end do
+        end do
+
+        ! Apply flow control forcing (following 2D implementation)
+        if (flow_control_method == 1) then
+            current_pressure_gradient = target_pressure_gradient
+            ! Add pressure gradient to x-momentum (streamwise direction)
+            do k = 1, nz
+                do j = 1, ny
+                    do i = 1, nx
+                        su(i,j,k) = su(i,j,k) + current_pressure_gradient
+                    end do
+                end do
+            end do
+            ! sv and sw remain unchanged (no y,z pressure gradients)
+        endif
+
+        ! NO DEALLOCATION NEEDED - workspace arrays remain allocated for reuse
+    end subroutine compute_source_terms_3d
+
+
+!============================================================================
+! SUBROUTINE: viscous_step_3d
+!
+! PURPOSE:
+!   Performs the viscous (diffusion) step of the fractional step method by
+!   solving the implicit Helmholtz equation for intermediate velocity fields.
+!   This implements the Crank-Nicolson scheme for viscous terms.
+!
+! ROLE IN THE SOLVER:
+!   This is the first major step in the fractional step time advancement.
+!   It solves: (I - θΔt ν∇²)u* = RHS, where RHS includes explicit terms,
+!   source terms, and explicit diffusion for second-order accuracy.
+!
+! NUMERICAL METHOD:
+!   1. Form right-hand side: RHS = u^n + Δt(source terms + explicit diffusion)
+!   2. Solve Helmholtz equation for each velocity component
+!   3. Apply boundary conditions to intermediate velocity u*
+!
+! TIME STEPPING:
+!   Uses Crank-Nicolson (θ=0.5) for second-order accuracy in time
+!============================================================================
+    subroutine viscous_step_3d()
+        implicit none
+        ! Viscous step: Solves the implicit system for the viscous terms.
+        ! (I - theta*dt*ν*∇²)u* = u^n + (1-theta)*dt*ν*∇²u^n + dt*NL + dt*Fx
+        ! This is a generalization of the implicit treatment from the 2D solver.
+        ! where theta = 1 for Backward Euler, and theta = 0.5 for Crank-Nicolson.
+        
+        real(wp) :: theta
+        real(wp), allocatable :: rhs_u(:,:,:), rhs_v(:,:,:), rhs_w(:,:,:)
+        
+        ! Select scheme based on input
+        if (trim(viscous_scheme_name) == 'backward-euler') then
+            theta = 1.0_wp
+        else ! Default to Crank-Nicolson
+            theta = 0.5_wp
+        endif
+        
+        allocate(rhs_u(nx,ny,nz), rhs_v(nx,ny,nz), rhs_w(nx,ny,nz))
+        
+        ! Construct the right-hand-side for the Helmholtz solves
+        ! RHS = u^n + dt*NL (for Backward Euler)
+        ! or RHS = u^n + dt*NL + 0.5*dt*ν*∇²u^n (for Crank-Nicolson)
+        
+        rhs_u = u + dt * su
+        rhs_v = v + dt * sv
+        rhs_w = w + dt * sw
+
+        ! Flow control forcing now applied in compute_source_terms_3d (following 2D pattern)
+        
+        if (theta < 1.0_wp) then ! Crank-Nicolson needs the explicit viscous term
+            call add_explicit_diffusion(rhs_u, u)
+            call add_explicit_diffusion(rhs_v, v)
+            call add_explicit_diffusion(rhs_w, w)
+        endif
+        
+        ! Solve the Helmholtz equation for each velocity component
+        ! Note the minus sign, since BC is u* = -dt*∇p
+        call solve_viscous_helmholtz(u_star, rhs_u, theta, -dt * dphidx_p(:,:,1), -dt * dphidx_p(:,:,nz))
+        call solve_viscous_helmholtz(v_star, rhs_v, theta, -dt * dphidy_p(:,:,1), -dt * dphidy_p(:,:,nz))
+        call solve_viscous_helmholtz(w_star, rhs_w, theta, -dt * dphidz_p(:,:,1), -dt * dphidz_p(:,:,nz))
+        
+        deallocate(rhs_u, rhs_v, rhs_w)
+        
+    end subroutine viscous_step_3d
+
+!============================================================================
+! SUBROUTINE: apply_constant_pressure_gradient_3d (DEPRECATED)
+!
+! PURPOSE:
+!   This subroutine was originally designed to apply constant pressure
+!   gradient forcing to the momentum equations.
+!
+! STATUS:
+!   DEPRECATED - Pressure gradient forcing is now applied in
+!   compute_source_terms_3d() following the 2D implementation pattern.
+!   This subroutine will be removed in future versions.
+!
+! REPLACEMENT:
+!   Flow control pressure forcing is now handled in compute_source_terms_3d()
+!   using the target_pressure_gradient parameter when flow_control_method = 1.
+!============================================================================
+    subroutine apply_constant_pressure_gradient_3d(rhs_u)
+        implicit none
+        real(wp), intent(inout) :: rhs_u(:,:,:)
+        
+        ! DEPRECATED: This subroutine is no longer called
+        ! Pressure gradient forcing now handled in compute_source_terms_3d()
+        write(*,'(A)') 'WARNING: apply_constant_pressure_gradient_3d() is deprecated'
+        
+    end subroutine apply_constant_pressure_gradient_3d
+
+!============================================================================
+! SUBROUTINE: apply_boundary_conditions_to_ustar (DEPRECATED)
+!
+! PURPOSE:
+!   This subroutine was originally designed to apply boundary conditions
+!   to the intermediate velocity field u* after the viscous step.
+!
+! STATUS:
+!   DEPRECATED - Boundary conditions are now applied directly within
+!   the Helmholtz solver for better numerical accuracy and efficiency.
+!   This subroutine will be removed in future versions.
+!
+! REPLACEMENT:
+!   Boundary conditions are now handled in solve_viscous_helmholtz()
+!   using Kim & Moin fractional step method with proper pressure BCs.
+!============================================================================
+    subroutine apply_boundary_conditions_to_ustar()
+        implicit none
+        integer :: i, j
+        
+        ! This subroutine is now DEPRECATED. The boundary conditions are applied
+        ! directly within the Helmholtz solver. This is left here as a record
+        ! of the change in methodology.
+        
+    end subroutine apply_boundary_conditions_to_ustar
+
+!============================================================================
+! SUBROUTINE: add_explicit_diffusion
+!
+! PURPOSE:
+!   Adds the explicit diffusion term (Δt/2Re)∇²f^n to the right-hand side
+!   of the Helmholtz equation for Crank-Nicolson time stepping, ensuring
+!   second-order accuracy in time.
+!
+! ROLE IN THE SOLVER:
+!   This routine is called only when θ < 1 (Crank-Nicolson scheme) to
+!   include the explicit portion of the viscous terms needed for proper
+!   time stepping accuracy.
+!
+! NUMERICAL METHOD:
+!   1. Computes Laplacian of input field using spectral differentiation
+!   2. Scales by explicit diffusion factor: (1-θ) * Δt / Re
+!   3. Adds result to the right-hand side array
+!
+! TIME STEPPING:
+!   Essential for Crank-Nicolson (θ=0.5) second-order time accuracy
+!============================================================================
+    subroutine add_explicit_diffusion(rhs, f_in)
+        implicit none
+        real(wp), intent(inout) :: rhs(:,:,:)
+        real(wp), intent(in)    :: f_in(:,:,:)
+        ! Adds the explicit part of the viscous term for Crank-Nicolson scheme.
+        ! RHS = RHS + (1-theta)*dt*nu*laplacian(f_in), where theta=0.5 and nu=1/Re.
+        !
+        ! PERFORMANCE OPTIMIZATION (Phase 1):
+        ! Uses pre-allocated workspace array instead of local allocation
+        
+        real(wp) :: factor
+        
+        ! Use workspace array instead of local allocation (PERFORMANCE CRITICAL)
+        ! Note: work1 is available since this is called outside compute_source_terms_3d
+        
+        ! Compute Laplacian of the input field
+        call compute_laplacian_3d(f_in, work1)  ! Use work1 as laplacian_f
+        
+        ! Factor for the explicit diffusion term (Crank-Nicolson)
+        factor = 0.5_wp * dt / re
+        
+        ! Add the scaled Laplacian to the RHS
+        rhs = rhs + factor * work1
+        
+        ! NO DEALLOCATION NEEDED - workspace array remains allocated for reuse
+        
+    end subroutine add_explicit_diffusion
+
+!============================================================================
+! SUBROUTINE: solve_viscous_helmholtz
+!
+! PURPOSE:
+!   Solves the viscous Helmholtz equation for an intermediate velocity field
+!   using a spectrally-accurate Galerkin formulation.
+!
+! MATHEMATICAL FORMULATION:
+!   The equation to solve for each velocity component f is the Helmholtz equation:
+!   (I - θΔtν∇²)f* = RHS
+!   where θ=0.5 for Crank-Nicolson, ν=1/Re, and RHS contains all explicit terms.
+!
+!   In spectral space (Fourier in x,y and LGL in z), this becomes a set of
+!   1D Helmholtz equations for each (kx, ky) wavenumber pair:
+!   (1 - θΔtν(d²/dz² - (kx² + ky²)))f̂* = RHŜ
+!
+! GALERKIN FORMULATION:
+!   The weak form is used for numerical stability and consistency:
+!   ∫ψ(f̂* - θΔtν(d²/dz² - k²f̂*))dz = ∫ψ(RHŜ)dz
+!
+!   This discretizes to a linear system for each (kx, ky) pair:
+!   [M - factor*A]f̂* = M*RHŜ
+!   where M is the diagonal LGL mass matrix and A is the stiffness matrix.
+!
+! BOUNDARY CONDITIONS (Kim & Moin 1985):
+!   For second-order temporal accuracy, the intermediate velocity u* is not
+!   zero at the wall. Instead, it is set by the pressure gradient from the
+!   previous time step: u*_wall = -Δt(∇pⁿ)_wall.
+!
+!   This non-homogeneous Dirichlet condition is handled using the "lifting method":
+!   1. The influence of the non-zero BCs is calculated and subtracted from the RHS.
+!   2. A modified system with homogeneous BCs is solved.
+!   3. The particular solution corresponding to the BCs is added back.
+!   (Steps 2 and 3 are combined by directly setting the boundary values in the solution vector)
+!
+! IMPLEMENTATION DETAILS:
+!   - Transforms RHS and BCs to spectral (kx,ky) space via 2D FFTs.
+!   - Loops over all unique (kx,ky) pairs.
+!   - Assembles the 1D complex `nz`×`nz` Galerkin Helmholtz matrix.
+!   - Applies lifting and solves the system using LAPACK's `zgesv`.
+!   - Transforms the solution back to physical space.
+!============================================================================
+    subroutine solve_viscous_helmholtz(f_out, rhs_in, theta, bc1, bc2)
+        implicit none
+        real(wp), intent(in)    :: rhs_in(:,:,:)
+        real(wp), intent(in)    :: theta
+        real(wp), intent(in)    :: bc1(:,:), bc2(:,:) ! Non-homogeneous BCs
+        real(wp), intent(out)   :: f_out(:,:,:)
+
+        integer :: i, j, k, n, info
+        integer, allocatable :: ipiv(:)
+        complex(wp), allocatable :: rhs_hat(:,:,:), f_hat(:,:,:)
+        complex(wp), allocatable :: helmholtz_matrix(:,:), sol_z(:)
+        complex(wp), allocatable :: bc1_hat(:,:), bc2_hat(:,:)
+        real(wp) :: factor
+        real(wp), allocatable :: rhs_in_slice(:,:), bc1_temp(:,:), bc2_temp(:,:)
+        real(wp), allocatable :: stiffness_matrix(:,:)
+
+
+        allocate(rhs_hat(nxhp, ny, nz), f_hat(nxhp, ny, nz))  ! CORRECTED: ny not nyhp
+        allocate(helmholtz_matrix(nz,nz), sol_z(nz), ipiv(nz))
+        allocate(rhs_in_slice(nx, ny), bc1_temp(nx,ny), bc2_temp(nx,ny))
+        allocate(bc1_hat(nxhp, ny), bc2_hat(nxhp, ny))  ! CORRECTED: ny not nyhp
+        allocate(stiffness_matrix(nz,nz))
+
+        factor = theta * dt / re
+
+        ! 1. Transform RHS and BCs to spectral space
+        bc1_temp = bc1; bc2_temp = bc2
+        do k = 1, nz
+            rhs_in_slice = rhs_in(:,:,k)
+            call fftw3_forward_2d_dns(plans, rhs_in_slice, rhs_hat(1:nxhp, 1:ny, k))
+        end do
+        call fftw3_forward_2d_dns(plans, bc1_temp, bc1_hat)
+        call fftw3_forward_2d_dns(plans, bc2_temp, bc2_hat)
+
+        ! Pre-calculate the z-stiffness matrix (constant for all wavenumbers)
+        ! A_stiff_ij = ∫ (dψ_i/dz * dψ_j/dz) dz, which corresponds to -d²/dz²
+
+        stiffness_matrix = 0.0_wp
+
+        do n = 1, nz
+          do k = 1, nz
+              stiffness_matrix(k,n) = sum(d1(:,k) * d1(:,n) * zwts(:)) * (2.0_wp / ybar)
+          end do
+        end do
+
+        ! 2. Loop over all horizontal wavenumbers
+        do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+            do i = 1, nxhp
+                ! 3. Build the WEAK-FORM (Galerkin) Helmholtz operator
+                ! Operator is [M + factor*(A_stiff + k²*M)]
+
+                helmholtz_matrix = stiffness_matrix * factor
+
+                do k = 1, nz
+                  ! Add mass matrix M and horizontal wavenumber term k²*M
+                  helmholtz_matrix(k,k) = helmholtz_matrix(k,k) + &
+                      (1.0_wp + factor * (xsq(i) + ysq(j))) * zwts(k) * (ybar / 2.0_wp)
+                end do
+                
+                ! Apply mass matrix to RHS for Galerkin formulation: M*RHS
+                do k = 1, nz
+                    sol_z(k) = rhs_hat(i,j,k) * zwts(k) * (ybar / 2.0_wp)
+                end do
+
+                ! 4. Modify RHS for non-homogeneous Dirichlet BCs (Lifting)
+                do k = 2, nz-1
+                    sol_z(k) = sol_z(k) - helmholtz_matrix(k,1) * bc1_hat(i,j) - helmholtz_matrix(k,nz) * bc2_hat(i,j)
+                end do
+
+                ! 5. Enforce Dirichlet boundary conditions by replacing rows
+                sol_z(1)  = bc1_hat(i,j)
+                sol_z(nz) = bc2_hat(i,j)
+                helmholtz_matrix(1,:) = 0.0_wp; helmholtz_matrix(1,1) = 1.0_wp
+                helmholtz_matrix(nz,:) = 0.0_wp; helmholtz_matrix(nz,nz) = 1.0_wp
+
+                ! 6. Solve the complex linear system
+                call zgesv(nz, 1, helmholtz_matrix, nz, ipiv, sol_z, nz, info)
+                if (info /= 0) stop 'zgesv ERROR in Helmholtz solver'
+
+                f_hat(i,j,:) = sol_z
+            end do
+        end do
+
+        ! 7. Transform solution back to physical space
+        do k = 1, nz
+            call fftw3_backward_2d_dns(plans, f_hat(1:nxhp, 1:ny, k), f_out(:,:,k))
+        end do
+
+        deallocate(rhs_hat, f_hat, helmholtz_matrix, sol_z, ipiv)
+        deallocate(bc1_hat, bc2_hat, bc1_temp, bc2_temp, rhs_in_slice)
+    end subroutine solve_viscous_helmholtz
+
+!============================================================================
+! SUBROUTINE: compute_laplacian_3d
+!
+! PURPOSE:
+!   Efficiently computes the Laplacian of a 3D field, ∇²f = ∂²f/∂x² + ∂²f/∂y² + ∂²f/∂z²,
+!   using a fully spectral approach for maximum accuracy and performance.
+!
+! ROLE IN THE SOLVER:
+!   This routine is called by `add_explicit_diffusion` to calculate the explicit
+!   viscous term needed only for the Crank-Nicolson time-stepping scheme. This
+!   term, (Δt/2Re)∇²uⁿ, is added to the right-hand side of the Helmholtz
+!   equation to achieve second-order accuracy in time.
+!
+! NUMERICAL METHOD:
+!   The calculation is performed entirely in spectral space to leverage the
+!   efficiency of the Fast Fourier Transform (FFT) and the properties of
+!   spectral differentiation.
+!
+!   1.  **Transform to Spectral Space:** The input field `f_in(x,y,z)` is transformed
+!       via 2D FFTs on each z-plane to its spectral representation, `f̂(kx,ky,z)`.
+!
+!   2.  **Apply Spectral Operators:** In this space, the Laplacian operator
+!       becomes a simple multiplication:
+!       ∇²f  ⟶  (-kx² - ky²)f̂ + ∂²f̂/∂z²
+!
+!       - The horizontal part `(-kx² - ky²)` is applied by multiplying `f̂`
+!         by the pre-computed squared wavenumbers.
+!       - The vertical part `∂²f̂/∂z²` is computed by applying the LGL second-
+!         derivative matrix (`d2`) to the vector of coefficients in the z-direction
+!         for each (kx, ky) pair. This includes the necessary geometric scaling
+!         factor `(2/ybar)²` to map from computational to physical space.
+!
+!   3.  **Transform Back:** The resulting spectral field, `(∇²f)̂`, is transformed
+!       back to physical space to get the final `laplacian` field.
+!
+! INPUTS:
+!   f_in      - The 3D physical field on which to operate.
+!
+! OUTPUTS:
+!   laplacian - The 3D physical field containing the computed Laplacian of f_in.
+!============================================================================
+    subroutine compute_laplacian_3d(f_in, laplacian)
+        implicit none
+        real(wp), intent(in)  :: f_in(:,:,:)
+        real(wp), intent(out) :: laplacian(:,:,:)
+        
+        integer :: i, j, k
+        complex(wp), allocatable :: f_hat(:,:,:), lap_hat(:,:,:)
+        real(wp), allocatable    :: f_slice(:,:)
+        real(wp) :: z_scale
+
+        allocate(f_hat(nxhp, ny, nz), lap_hat(nxhp, ny, nz))  ! CORRECTED: ny not nyhp
+        allocate(f_slice(nx,ny))
+
+        z_scale = 2.0_wp / ybar
+
+        ! 1. Transform the field f_in to spectral space f_hat (slice by slice)
+        do k = 1, nz
+            f_slice = f_in(:,:,k)
+            call fftw3_forward_2d_dns(plans, f_slice, f_hat(1:nxhp, 1:ny, k))
+        end do
+
+        ! 2. Compute the Laplacian in spectral space for each (kx, ky) pair
+        do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+            do i = 1, nxhp
+                ! Apply d²/dz² to the vector of z-coefficients with CORRECT scaling
+                lap_hat(i,j,:) = matmul(d2, f_hat(i,j,:)) * z_scale**2
+                
+                ! Add the horizontal part of the Laplacian -(kx² + ky²)
+                lap_hat(i,j,:) = lap_hat(i,j,:) - (xsq(i) + ysq(j)) * f_hat(i,j,:)
+            end do
+        end do
+
+        ! 3. Transform the result lap_hat back to physical space
+        do k = 1, nz
+            call fftw3_backward_2d_dns(plans, lap_hat(1:nxhp, 1:ny, k), laplacian(:,:,k))
+        end do
+
+        deallocate(f_hat, lap_hat, f_slice)
+    end subroutine compute_laplacian_3d
+
+!============================================================================
+! SUBROUTINE: solve_pressure_3d (Corrected Galerkin Formulation)
+!
+! PURPOSE:
+!   Solves the pressure Poisson equation ∇²φ = ∇·u*/dt using a consistent
+!   spectral Galerkin method with homogeneous Neumann boundary conditions.
+!
+! GALERKIN FORMULATION:
+!   The weak form, ∫ψ(∇²φ)dV = ∫ψ(∇·u*/dt)dV, is integrated by parts to become:
+!   -∫(∇ψ·∇φ)dV = ∫ψ(∇·u*/dt)dV
+!   The homogeneous Neumann BC (∂φ/∂n = 0) is a "natural" condition of this
+!   formulation and is satisfied implicitly.
+!
+! DISCRETIZATION:
+!   - The left side becomes the "stiffness matrix", A.
+!   - The right side becomes the "mass matrix" M times the source vector f.
+!   - The resulting system for each (kx, ky) mode is: A * φ_hat = M * f_hat
+!
+! SINGULARITY:
+!   The (kx=0, ky=0) mode is singular. It is made solvable by "pinning"
+!   the pressure at one point (φ=0 at z=-1), enforced by modifying the
+!   first row and column of the matrix A for that specific mode.
+!============================================================================
+    subroutine solve_pressure_3d()
+        implicit none
+        integer :: i, j, k, n, info
+        integer, allocatable :: ipiv(:)
+        real(wp), allocatable :: div_ustar(:,:,:), div_ustar_slice(:,:)
+        complex(wp), allocatable :: div_hat(:,:,:), phi_hat(:,:,:)
+        complex(wp), allocatable :: poisson_matrix(:,:), rhs_z(:)
+
+        ! Allocate arrays
+        allocate(div_ustar(nx,ny,nz))
+        allocate(div_ustar_slice(nx,ny))
+        allocate(div_hat(nxhp, ny, nz), phi_hat(nxhp, ny, nz)) ! CORRECTED: ny not nyhp
+        allocate(poisson_matrix(nz,nz), rhs_z(nz))
+        allocate(ipiv(nz))
+
+        ! 1. Compute divergence of u_star and scale by dt
+        call compute_divergence_3d(div_ustar, u_star, v_star, w_star)
+        div_ustar = div_ustar / dt
+
+        ! 2. Transform divergence to spectral space (FFT on each x-y plane)
+        do k = 1, nz
+            div_ustar_slice = div_ustar(:,:,k)
+            call fftw3_forward_2d_dns(plans, div_ustar_slice, div_hat(1:nxhp, 1:ny, k))
+        end do
+
+        ! 3. Loop over all horizontal wavenumbers
+        do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+            do i = 1, nxhp
+                ! 4. Build the WEAK-FORM (Galerkin) Poisson operator matrix
+                ! This is the discrete form of A_ij = -∫(∇ψ_i · ∇ψ_j)dV
+                poisson_matrix = 0.0_wp
+                do k = 1, nz
+                    do n = 1, nz
+                        ! Contribution from d²/dz² term
+                        poisson_matrix(k,n) = -sum(d1(:,k) * d1(:,n) * zwts(:)) * (2.0_wp / ybar)
+                    end do
+                    ! Contribution from -(kx² + ky²) term
+                    poisson_matrix(k,k) = poisson_matrix(k,k) - (xsq(i) + ysq(j)) * zwts(k) * (ybar / 2.0_wp)
+                end do
+
+                ! 5. Get the RHS and scale by the mass matrix for Galerkin consistency
+                ! This is the discrete form of RHS_i = ∫ψ_i * f dV
+                rhs_z = div_hat(i,j,:)
+                do k = 1, nz
+                    rhs_z(k) = rhs_z(k) * (0.5_wp * ybar * zwts(k))
+                end do
+
+                ! 6. SPECIAL TREATMENT for the singular (kx=0, ky=0) mode
+                if (i == 1 .and. j == 1) then
+                    ! To make the system solvable, pin the pressure at the bottom wall (k=1).
+                    ! Zeroing the row and column decouples the first equation.
+                    do k = 1, nz
+                        poisson_matrix(1,k) = cmplx(0.0_wp, 0.0_wp, kind=wp)
+                        poisson_matrix(k,1) = cmplx(0.0_wp, 0.0_wp, kind=wp)
+                    end do
+                    poisson_matrix(1,1) = cmplx(1.0_wp, 0.0_wp, kind=wp)
+                    rhs_z(1) = cmplx(0.0_wp, 0.0_wp, kind=wp)
+                end if
+                
+                ! 7. Solve the complex linear system A*φ = f
+                call zgesv(nz, 1, poisson_matrix, nz, ipiv, rhs_z, nz, info)
+                if (info /= 0) then
+                    write(*,*) 'zgesv ERROR in pressure solver, info =', info, ' at i,j=', i, j
+                    stop
+                end if
+
+                ! 8. Store the solution vector
+                phi_hat(i,j,:) = rhs_z
+            end do
+        end do
+
+        ! 9. Transform the solution phi_hat back to physical space
+        do k = 1, nz
+            call fftw3_backward_2d_dns(plans, phi_hat(1:nxhp, 1:ny, k), phi(:,:,k))
+        end do
+
+        ! Deallocate temporary arrays
+        deallocate(div_ustar, div_hat, phi_hat, poisson_matrix, rhs_z, ipiv, div_ustar_slice)
+        
+    end subroutine solve_pressure_3d
+
+!============================================================================
+! SUBROUTINE: compute_divergence_3d
+!
+! PURPOSE:
+!   Efficiently computes the divergence of a 3D vector field using
+!   spectral differentiation: ∇·f = ∂fx/∂x + ∂fy/∂y + ∂fz/∂z
+!
+! ROLE IN THE SOLVER:
+!   Used for diagnostic purposes to check incompressibility constraint
+!   and in the pressure correction step to compute div(u*) for the
+!   fractional step method.
+!
+! NUMERICAL METHOD:
+!   1. Uses spectral differentiation for x and y derivatives (FFT-based)
+!   2. Uses LGL collocation for z-direction derivative
+!   3. Sums all three directional derivatives to get total divergence
+!
+! APPLICATIONS:
+!   - Monitoring incompressibility: div(u) should be ≈ 0
+!   - Pressure correction: right-hand side for Poisson equation
+!============================================================================    
+    subroutine compute_divergence_3d(div_field, f_x, f_y, f_z)
+        ! Efficiently computes divergence: dfx/dx + dfy/dy + dfz/dz
+        implicit none
+        real(wp), intent(in)  :: f_x(:,:,:), f_y(:,:,:), f_z(:,:,:)
+        real(wp), intent(out) :: div_field(:,:,:)
+        real(wp), allocatable :: dfdz(:,:,:), dfy_dy(:,:,:)
+
+        allocate(dfdz(nx,ny,nz), dfy_dy(nx,ny,nz))
+
+        ! Compute all derivatives in one efficient call
+        ! dfx/dx is stored in div_field
+        call compute_derivatives_3d(f_x, dfdx=div_field, calc_dx=.true.)
+        ! dfy/dy is stored in dfy_dy
+        call compute_derivatives_3d(f_y, dfdy=dfy_dy, calc_dy=.true.)
+        ! dfz/dz is stored in dfdz
+        call compute_derivatives_3d(f_z, dfdz=dfdz, calc_dz=.true.)
+
+        ! Sum the components
+        div_field = div_field + dfy_dy + dfdz
+
+        deallocate(dfdz, dfy_dy)
+    end subroutine compute_divergence_3d
+
+!============================================================================
+! SUBROUTINE: pressure_correction_3d
+!
+! PURPOSE:
+!   Performs the pressure correction step of the fractional step method,
+!   updating the velocity field to enforce the incompressibility constraint
+!   ∇·u = 0 using the pressure correction φ.
+!
+! ROLE IN THE SOLVER:
+!   This is the final step in the fractional step time advancement.
+!   It projects the intermediate velocity u* onto the divergence-free
+!   space using the pressure correction: u^(n+1) = u* - ∇φ
+!
+! NUMERICAL METHOD:
+!   1. Compute pressure correction derivatives: ∇φ
+!   2. Update velocity: u^(n+1) = u* - Δt∇φ
+!   3. Update pressure: p^(n+1) = p^n + φ (for pressure history)
+!
+! FRACTIONAL STEP:
+!   Ensures the final velocity field satisfies incompressibility
+!   while maintaining the momentum balance from the viscous step.
+!============================================================================
+    subroutine pressure_correction_3d()
+        implicit none
+        ! Apply pressure correction: u^{n+1} = u* - dt*∇φ
+        real(wp), allocatable :: dphidx(:,:,:), dphidy(:,:,:), dphidz(:,:,:)
+
+        allocate(dphidx(nx,ny,nz), dphidy(nx,ny,nz), dphidz(nx,ny,nz))
+
+        ! 1. Calculate the gradient of the correction field phi
+        call compute_derivatives_3d(phi, dphidx, dphidy, dphidz)
+
+        ! 2. Correct the velocity
+        u = u_star - dt * dphidx
+        v = v_star - dt * dphidy
+        w = w_star - dt * dphidz
+
+        ! 3. Update the total pressure field
+        p_total = p_total + phi
+
+        ! 4. Store the gradient of the NEW total pressure for the NEXT time step's BC
+        !    (Note: dphidx_p is now a misnomer, it should be dpdx_p)
+        call compute_derivatives_3d(p_total, dphidx_p, dphidy_p, dphidz_p)
+
+        deallocate(dphidx, dphidy, dphidz)
+        
+        ! Boundary values will be set by apply_boundary_conditions_3d
+        
+    end subroutine pressure_correction_3d
+
+!============================================================================
+! SUBROUTINE: apply_boundary_conditions_3d
+!
+! PURPOSE:
+!   Applies no-slip boundary conditions to all velocity components at the
+!   channel walls (z = ±1) after each time step, ensuring the velocity
+!   field satisfies the physical boundary constraints.
+!
+! ROLE IN THE SOLVER:
+!   Called after pressure correction to enforce no-slip conditions.
+!   This is essential for maintaining the proper boundary conditions
+!   throughout the time evolution.
+!
+! BOUNDARY CONDITIONS:
+!   - u = 0 at z = ±1 (no slip at walls)
+!   - v = 0 at z = ±1 (no slip at walls)  
+!   - w = 0 at z = ±1 (no slip at walls)
+!   - Periodic conditions in x,y are handled implicitly by FFT
+!
+! IMPLEMENTATION:
+!   Sets velocity components to zero at wall grid points (k=1 and k=nz)
+!============================================================================
+    subroutine apply_boundary_conditions_3d()
+        implicit none
+        integer :: i, j
+        
+        ! Apply no-slip conditions at walls
+        do j = 1, ny
+            do i = 1, nx
+                ! Wall 1 (k=1)
+                u(i,j,1) = uw1(i,j)
+                v(i,j,1) = vw1(i,j)
+                w(i,j,1) = ww1(i,j)
+                
+                ! Wall 2 (k=nz)
+                u(i,j,nz) = uw2(i,j)
+                v(i,j,nz) = vw2(i,j)
+                w(i,j,nz) = ww2(i,j)
+            end do
+        end do
+        
+    end subroutine apply_boundary_conditions_3d
+    
+    ! =========================================================================
+    ! DIAGNOSTICS AND OUTPUT
+    ! =========================================================================
+
+!============================================================================
+! SUBROUTINE: test_fft_roundtrip
+!
+! PURPOSE:
+!   Performs a comprehensive round-trip test of the 2D FFT routines to
+!   verify correct implementation and accuracy of the FFTW3 spectral
+!   operations used throughout the solver.
+!
+! ROLE IN THE SOLVER:
+!   Quality assurance routine called during initialization to validate
+!   the spectral framework before beginning time integration. Ensures
+!   FFT operations maintain numerical accuracy.
+!
+! TEST METHODOLOGY:
+!   1. Creates analytical test field with known Fourier content
+!   2. Performs forward FFT: physical → spectral space
+!   3. Performs inverse FFT: spectral → physical space
+!   4. Compares result with original field
+!   5. Reports maximum error and validates accuracy
+!
+! VALIDATION:
+!   Checks that ||f_original - f_recovered|| < tolerance
+!   Essential for confirming spectral operations are correct
+!============================================================================
+    subroutine test_fft_roundtrip()
+        implicit none
+        ! This subroutine performs a round-trip test of the 2D FFT routines
+        ! to ensure they are working correctly. It creates an analytical field,
+        ! performs a forward transform followed by a backward transform, and
+        ! checks if the result matches the original field.
+
+        real(wp), allocatable :: original_field(:,:,:), reconstructed_field(:,:,:)
+        complex(wp), allocatable :: spectral_field(:,:)
+        real(wp), allocatable :: original_slice(:,:), reconstructed_slice(:,:)
+        real(wp) :: x, y, z, error
+        integer :: i, j, k
+
+        write(*,'(A)') ' ============================================'
+        write(*,'(A)') '   PERFORMING FFT ROUND-TRIP TEST'
+        write(*,'(A)') ' ============================================'
+
+        ! Allocate test arrays
+        allocate(original_field(nx,ny,nz))
+        allocate(reconstructed_field(nx,ny,nz))
+        allocate(spectral_field(nxhp,ny))  ! CORRECTED: ny not nyhp
+        allocate(original_slice(nx,ny), reconstructed_slice(nx,ny))
+
+        original_field = 0.0_wp
+        reconstructed_field = 0.0_wp
+
+        ! 1. Create a known analytical field
+        do k = 1, nz
+            z = zpts(k)
+            do j = 1, ny
+                y = real(j-1, wp) * ylen / real(ny, wp)
+                do i = 1, nx
+                    x = real(i-1, wp) * xlen / real(nx, wp)
+                    original_field(i,j,k) = sin(2.0_wp * alpha * x) * cos(3.0_wp * beta * y) * (1.0_wp - z**2)
+                end do
+            end do
+        end do
+
+        ! 2. Perform forward and backward FFT on each z-plane
+        do k = 1, nz
+            original_slice = original_field(:,:,k)
+            
+            ! Forward transform
+            call fftw3_forward_2d_dns(plans, original_slice, spectral_field)
+            
+            ! Backward transform
+            call fftw3_backward_2d_dns(plans, spectral_field, reconstructed_slice)
+            
+            reconstructed_field(:,:,k) = reconstructed_slice
+        end do
+
+        ! 3. Calculate the maximum absolute error
+        error = maxval(abs(original_field - reconstructed_field))
+
+        ! 4. Report results
+        write(*,'(A, ES10.3)') '   Max absolute error on FFT round-trip: ', error
+        if (error < 1.0e-12_wp) then
+            write(*,'(A)') '   --> FFT TEST PASSED'
+        else
+            write(*,'(A)') '   --> FFT TEST FAILED'
+        endif
+        write(*,'(A)') ' ============================================'
+
+        ! Deallocate test arrays
+        deallocate(original_field, reconstructed_field, spectral_field)
+        deallocate(original_slice, reconstructed_slice)
+
+    end subroutine test_fft_roundtrip
+
+!============================================================================
+! SUBROUTINE: output_diagnostics_3d
+!
+! PURPOSE:
+!   Computes and outputs key diagnostic quantities for monitoring the
+!   3D DNS simulation, including velocity statistics, kinetic energy,
+!   and flow control parameters.
+!
+! ROLE IN THE SOLVER:
+!   Called periodically during time integration to provide real-time
+!   monitoring of simulation health and physical quantities of interest.
+!   Essential for detecting numerical issues and tracking flow evolution.
+!
+! DIAGNOSTICS COMPUTED:
+!   - Maximum velocity components: max|u|, max|v|, max|w|
+!   - Total kinetic energy: ∫(u² + v² + w²)/2 dV
+!   - Flow control status: current pressure gradient
+!   - Time step information and simulation progress
+!
+! OUTPUT:
+!   Formatted text output showing time step, diagnostics, and energy
+!   suitable for monitoring and post-processing analysis
+!============================================================================
+    subroutine output_diagnostics_3d(istep)
+        implicit none
+        integer, intent(in) :: istep
+        integer :: i, j, k  ! Loop variables for energy calculation
+        real(wp) :: umax, vmax, wmax, energy
+        
+        ! Compute basic diagnostics
+        umax = maxval(abs(u))
+        vmax = maxval(abs(v))  ! NEW: spanwise velocity max
+        wmax = maxval(abs(w))
+        
+        ! Compute kinetic energy using proper LGL quadrature integration
+        ! E = (1/2) ∫∫∫ (u² + v² + w²) dx dy dz
+        ! For spectral methods: uniform spacing in x,y, LGL weights in z
+        energy = 0.0_wp
+        do k = 1, nz
+            do j = 1, ny  
+                do i = 1, nx
+                    energy = energy + 0.5_wp * (u(i,j,k)**2 + v(i,j,k)**2 + w(i,j,k)**2) * &
+                             (xlen/real(nx,wp)) * (ylen/real(ny,wp)) * zwts(k) * (ybar / 2.0_wp)
+                end do
+            end do
+        end do
+        ! Normalize by total domain volume to get mean kinetic energy density
+        energy = energy / (xlen * ylen * ybar)
+        
+        write(*,'(A,I6,A,F8.5,A,5(ES12.4,A))') &
+            ' Step ', istep, ', t=', time, &
+            ', |u|max=', umax, ', |v|max=', vmax, ', |w|max=', wmax, ', E=', energy, &
+            ', dP/dx=', current_pressure_gradient
+            
+    end subroutine output_diagnostics_3d
+
+!============================================================================
+! SUBROUTINE: check_divergence_3d
+!
+! PURPOSE:
+!   Monitors the incompressibility constraint by computing the maximum
+!   divergence of the velocity field. This is a critical diagnostic for
+!   verifying the fractional step method is working correctly.
+!
+! ROLE IN THE SOLVER:
+!   Quality assurance routine that validates the pressure projection step.
+!   Since the Navier-Stokes equations assume incompressible flow (∇·u = 0),
+!   large divergence values indicate numerical problems.
+!
+! DIAGNOSTIC METHOD:
+!   1. Computes velocity divergence: ∇·u = ∂u/∂x + ∂v/∂y + ∂w/∂z
+!   2. Finds maximum absolute divergence across the domain
+!   3. Reports maximum divergence for monitoring
+!
+! INTERPRETATION:
+!   - Small values (< 10⁻¹⁰): Excellent incompressibility
+!   - Moderate values (10⁻⁶): Acceptable for most applications
+!   - Large values (> 10⁻³): Indicates numerical problems
+!============================================================================
+    subroutine check_divergence_3d(istep)
+        implicit none
+        integer, intent(in) :: istep
+        real(wp) :: div_max
+        real(wp), allocatable :: div_field(:,:,:)
+
+        allocate(div_field(nx,ny,nz))
+
+        ! Correctly compute divergence: du/dx + dv/dy + dw/dz
+        call compute_divergence_3d(div_field, u, v, w)
+        div_max = maxval(abs(div_field))
+
+        write(*,'(A,I6,A,E12.4)') ' Step ', istep, ', Max divergence: ', div_max
+
+        deallocate(div_field)
+        
+    end subroutine check_divergence_3d
+
+!============================================================================
+! SUBROUTINE: deallocate_arrays_3d
+!
+! PURPOSE:
+!   Deallocates all dynamic arrays and cleans up memory allocated during
+!   the 3D DNS simulation, ensuring proper memory management and preventing
+!   memory leaks.
+!
+! ROLE IN THE SOLVER:
+!   Called at the end of the simulation to free all allocated memory,
+!   including velocity fields, pressure arrays, source terms, spectral
+!   workspace, and FFTW plans.
+!
+! MEMORY CLEANUP:
+!   - Velocity fields: u, v, w and their time history
+!   - Pressure arrays: p_total and pressure correction fields
+!   - Source terms: su, sv, sw and previous time levels
+!   - Spectral workspace: FFT arrays and wavenumber grids
+!   - LGL quadrature: nodes, weights, and derivative matrices
+!   - FFTW plans: Forward and backward transform plans
+!
+! BEST PRACTICE:
+!   Essential for clean program termination and memory management
+!============================================================================
+    subroutine deallocate_arrays_3d()
+        implicit none
+        
+        deallocate(u, v, w, p_total, un, vn, wn)
+        deallocate(u_star, v_star, w_star, phi)
+        deallocate(dphidx_p, dphidy_p, dphidz_p)
+        deallocate(su, sv, sw, ox, oy, oz)
+        deallocate(work1, work2, work3, work4, work5, work6)
+        deallocate(work7, work8, work9, work10, work11, work12)
+        deallocate(uw1, vw1, ww1, uw2, vw2, ww2)
+        deallocate(xw, xsq, yw, ysq)
+        deallocate(zpts, zwts, d1, d2)
+        deallocate(work_x, work_y)
+        deallocate(sample_real, sample_complex)
+        
+        call destroy_fftw3_plans_dns(plans)
+        
+        write(*,'(A)') ' Memory cleanup completed'
+        
+    end subroutine deallocate_arrays_3d
+
+!============================================================================
+! SUBROUTINE: compute_derivatives_3d
+!
+! PURPOSE:
+!   Computes the partial derivatives (∂f/∂x, ∂f/∂y, ∂f/∂z) of a 3D field.
+!
+! DESCRIPTION:
+!   This is a general-purpose, high-accuracy routine for calculating gradients.
+!   It employs a mixed-space approach suitable for a doubly-periodic channel:
+!
+!   - X and Y Derivatives (∂f/∂x, ∂f/∂y):
+!     Computed in Fourier space for spectral accuracy. The field is transformed
+!     slice-by-slice using a 2D FFT. In spectral space, differentiation
+!     becomes a simple multiplication by `i*kx` or `i*ky`.
+!
+!   - Z Derivative (∂f/∂z):
+!     Computed in physical space using the pre-computed Legendre-Gauss-Lobatto
+!     (LGL) differentiation matrix (`d1`). This provides spectral accuracy in
+!     the wall-normal direction. The calculation includes a geometric scaling
+!     factor `(2/ybar)` to correctly map from the computational domain [-1,1]
+!     to the physical domain.
+!
+! EFFICIENCY:
+!   The subroutine uses optional arguments (`calc_dx`, `calc_dy`, `calc_dz`) to
+!   avoid unnecessary computations. If only one derivative is needed (e.g., in
+!   the divergence calculation), the others are skipped, saving significant
+!   computational cost from repeated FFTs.
+!
+! INPUTS:
+!   f_in        - The 3D physical field to be differentiated.
+!   calc_dx, etc. - (Optional) Logical flags to specify which derivatives to compute.
+!
+! OUTPUTS:
+!   dfdx, dfdy, dfdz - (Optional) The computed partial derivatives.
+!============================================================================
+    subroutine compute_derivatives_3d(f_in, dfdx, dfdy, dfdz, calc_dx, calc_dy, calc_dz)
+        implicit none
+        real(wp), intent(in) :: f_in(:,:,:)
+        real(wp), intent(out), optional :: dfdx(:,:,:), dfdy(:,:,:), dfdz(:,:,:)
+        logical, intent(in), optional :: calc_dx, calc_dy, calc_dz
+
+        integer :: i, j, k
+        complex(wp), allocatable :: f_hat(:,:), dfdx_hat(:,:), dfdy_hat(:,:)
+        real(wp), allocatable :: f_slice(:,:), dfdx_slice(:,:), dfdy_slice(:,:)
+        real(wp) :: z_scale
+        logical :: do_dx, do_dy, do_dz
+
+        ! Determine which derivatives to compute
+        do_dx = .false.; if (present(calc_dx)) do_dx = calc_dx
+        do_dy = .false.; if (present(calc_dy)) do_dy = calc_dy
+        do_dz = .false.; if (present(calc_dz)) do_dz = calc_dz
+        ! Default to all if no flags are provided
+        if (.not. (present(calc_dx) .or. present(calc_dy) .or. present(calc_dz))) then
+            do_dx = .true.; do_dy = .true.; do_dz = .true.
+        endif
+
+        ! Scaling for z-derivative. For a domain z in [-1, 1], the scaling is 1.
+        ! For a general domain [a, b], the LGL domain is mapped via z' = 2*(z-a)/(b-a) - 1.
+        ! The derivative scaling is dz'/dz = 2/(b-a). Here, b-a = ybar.
+        z_scale = 2.0_wp / ybar
+
+        ! Z-derivative (LGL)
+        if (do_dz) then
+            if (.not. present(dfdz)) stop 'dfdz must be provided when calc_dz is true'
+            dfdz = 0.0_wp
+            do j = 1, ny
+                do i = 1, nx
+                    dfdz(i,j,:) = z_scale * matmul(d1, f_in(i,j,:))
+                end do
+            end do
+        endif
+
+        ! X and Y derivatives (FFT)
+        if (do_dx .or. do_dy) then
+            if (do_dx .and. .not. present(dfdx)) stop 'dfdx must be provided when calc_dx is true'
+            if (do_dy .and. .not. present(dfdy)) stop 'dfdy must be provided when calc_dy is true'
+
+            allocate(f_hat(nxhp, ny))  ! CORRECTED: ny not nyhp
+            allocate(f_slice(nx,ny))
+            if (do_dx) then
+                allocate(dfdx_hat(nxhp, ny), dfdx_slice(nx,ny))  ! CORRECTED: ny not nyhp
+                dfdx = 0.0_wp
+            endif
+            if (do_dy) then
+                allocate(dfdy_hat(nxhp, ny), dfdy_slice(nx,ny))  ! CORRECTED: ny not nyhp
+                dfdy = 0.0_wp
+            endif
+
+            do k = 1, nz
+                f_slice = f_in(:,:,k)
+                call fftw3_forward_2d_dns(plans, f_slice, f_hat)
+
+                if (do_dx) then
+                    do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+                        do i = 1, nxhp
+                            dfdx_hat(i,j) = f_hat(i,j) * cmplx(0.0_wp, xw(i), kind=wp)
+                        end do
+                    end do
+                    call fftw3_backward_2d_dns(plans, dfdx_hat, dfdx_slice)
+                    dfdx(:,:,k) = dfdx_slice
+                endif
+
+                if (do_dy) then
+                    do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+                        do i = 1, nxhp
+                            dfdy_hat(i,j) = f_hat(i,j) * cmplx(0.0_wp, yw(j), kind=wp)
+                        end do
+                    end do
+                    call fftw3_backward_2d_dns(plans, dfdy_hat, dfdy_slice)
+                    dfdy(:,:,k) = dfdy_slice
+                endif
+            end do
+
+            deallocate(f_hat, f_slice)
+            if (do_dx) deallocate(dfdx_hat, dfdx_slice)
+            if (do_dy) deallocate(dfdy_hat, dfdy_slice)
+        endif
+    end subroutine compute_derivatives_3d
+
+
+end program dns_3d

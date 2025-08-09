@@ -1,0 +1,43 @@
+# Makefile for 3D DNS Solver - Phase 1
+# For DNS_pressure_BC_3D.f90
+
+# Compiler settings
+FC = gfortran
+FFLAGS = -O2 -Wall -fdefault-real-8 -fdefault-double-8
+LDFLAGS = -llapack -lblas
+
+# Target executable
+TARGET = dns_3d
+
+# Source files
+SOURCES = lgl_module.f90 fft_module.f90 DNS_pressure_BC_3D.f90
+
+# Object files
+OBJECTS = $(SOURCES:.f90=.o)
+
+# Default target
+all: $(TARGET)
+
+# Build executable
+$(TARGET): $(OBJECTS)
+	$(FC) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
+
+# Compile Fortran source files
+%.o: %.f90
+	$(FC) $(FFLAGS) -c $< -o $@
+
+# Clean up
+clean:
+	rm -f *.o *.mod $(TARGET)
+
+# Run with 3D input file
+run: $(TARGET)
+	cp input_3d.dat input_nondimensional.dat
+	./$(TARGET)
+
+# Phase 1 test (just initialization)
+test_phase1: $(TARGET)
+	cp input_3d.dat input_nondimensional.dat
+	./$(TARGET)
+
+.PHONY: all clean run test_phase1
