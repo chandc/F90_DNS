@@ -1,0 +1,57 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     dns_3d_pressure_bc
+relocations:
+  - { offset: 0x1A, size: 0x8, addend: 0x0, symName: _setup_spectral_3d.20.lto_priv.0, symObjAddr: 0x0, symBinAddr: 0x10001FA60, symSize: 0x1554 }
+  - { offset: 0x3A, size: 0x8, addend: 0x0, symName: _setup_spectral_3d.20.lto_priv.0, symObjAddr: 0x0, symBinAddr: 0x10001FA60, symSize: 0x1554 }
+  - { offset: 0x484, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___copy_fftw3_dns_module_Fftwf_iodim, symObjAddr: 0x20, symBinAddr: 0x100004860, symSize: 0x20 }
+  - { offset: 0x4C9, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___copy_fftw3_dns_module_Fftw_iodim64, symObjAddr: 0x40, symBinAddr: 0x100004880, symSize: 0x20 }
+  - { offset: 0x507, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___copy_fftw3_dns_module_Fftw_iodim, symObjAddr: 0x60, symBinAddr: 0x1000048A0, symSize: 0x20 }
+  - { offset: 0x545, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___copy_fftw3_dns_module_Fftw3_dns_plans, symObjAddr: 0x80, symBinAddr: 0x1000048C0, symSize: 0xC }
+  - { offset: 0x590, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___copy___iso_c_binding_C_ptr, symObjAddr: 0x8C, symBinAddr: 0x1000048CC, symSize: 0x14 }
+  - { offset: 0x5CE, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___copy___iso_c_binding_C_funptr, symObjAddr: 0xA0, symBinAddr: 0x1000048E0, symSize: 0xC }
+  - { offset: 0x610, size: 0x8, addend: 0x0, symName: _calculate_bulk_velocity_3d.1, symObjAddr: 0xAC, symBinAddr: 0x1000048EC, symSize: 0x3D8 }
+  - { offset: 0x698, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD_destroy_fftw3_plans_dns.part.0, symObjAddr: 0x484, symBinAddr: 0x100004CC4, symSize: 0x84 }
+  - { offset: 0x6B9, size: 0x8, addend: 0x0, symName: _output_diagnostics_3d.6, symObjAddr: 0x508, symBinAddr: 0x100004D48, symSize: 0xF58 }
+  - { offset: 0x764, size: 0x8, addend: 0x0, symName: _compute_derivatives_3d.2, symObjAddr: 0x1460, symBinAddr: 0x100005CA0, symSize: 0x2B0C }
+  - { offset: 0xC92, size: 0x8, addend: 0x0, symName: _compute_source_terms_3d.16, symObjAddr: 0x3F6C, symBinAddr: 0x1000087AC, symSize: 0x1AE4 }
+  - { offset: 0xCFF, size: 0x8, addend: 0x0, symName: _compute_divergence_3d.10.constprop.0, symObjAddr: 0x5A50, symBinAddr: 0x10000A290, symSize: 0x870 }
+  - { offset: 0xDF0, size: 0x8, addend: 0x0, symName: _check_divergence_3d.5, symObjAddr: 0x62C0, symBinAddr: 0x10000AB00, symSize: 0x570 }
+  - { offset: 0xE46, size: 0x8, addend: 0x0, symName: _add_explicit_diffusion.14, symObjAddr: 0x6830, symBinAddr: 0x10000B070, symSize: 0x2578 }
+  - { offset: 0x1092, size: 0x8, addend: 0x0, symName: _solve_viscous_helmholtz.13.constprop.0.isra.0, symObjAddr: 0x8DA8, symBinAddr: 0x10000D5E8, symSize: 0x29B8 }
+  - { offset: 0x1338, size: 0x8, addend: 0x0, symName: _viscous_step_3d.15, symObjAddr: 0xB760, symBinAddr: 0x10000FFA0, symSize: 0x2984 }
+  - { offset: 0x139F, size: 0x8, addend: 0x0, symName: _initialize_fields_3d.18, symObjAddr: 0xE0E4, symBinAddr: 0x100012924, symSize: 0x1848 }
+  - { offset: 0x1428, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_lgl_quadrature_3d, symObjAddr: 0xF92C, symBinAddr: 0x10001416C, symSize: 0x45C }
+  - { offset: 0x156A, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_lgl_quadrature_1d, symObjAddr: 0xFD88, symBinAddr: 0x1000145C8, symSize: 0x1A0 }
+  - { offset: 0x1624, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_stiffness_matrix, symObjAddr: 0xFF28, symBinAddr: 0x100014768, symSize: 0x2C4 }
+  - { offset: 0x171B, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_mass_matrix, symObjAddr: 0x101EC, symBinAddr: 0x100014A2C, symSize: 0x2E4 }
+  - { offset: 0x17C2, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_differentiation_matrix, symObjAddr: 0x104D0, symBinAddr: 0x100014D10, symSize: 0x614 }
+  - { offset: 0x1895, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_spectral_differentiate, symObjAddr: 0x10AE4, symBinAddr: 0x100015324, symSize: 0x308 }
+  - { offset: 0x1988, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_interpolation_matrix, symObjAddr: 0x10DEC, symBinAddr: 0x10001562C, symSize: 0x314 }
+  - { offset: 0x1AAC, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_spectral_interpolate, symObjAddr: 0x11100, symBinAddr: 0x100015940, symSize: 0x460 }
+  - { offset: 0x1BD6, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_legendre_derivative, symObjAddr: 0x11560, symBinAddr: 0x100015DA0, symSize: 0x200 }
+  - { offset: 0x1C30, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_legendre_derivative, symObjAddr: 0x11560, symBinAddr: 0x100015DA0, symSize: 0x200 }
+  - { offset: 0x1C88, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_legendre_poly, symObjAddr: 0x11760, symBinAddr: 0x100015FA0, symSize: 0x16C }
+  - { offset: 0x1D16, size: 0x8, addend: 0x0, symName: ___lgl_module_MOD_lgl_nodes_weights, symObjAddr: 0x118CC, symBinAddr: 0x10001610C, symSize: 0x394 }
+  - { offset: 0x1E99, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD_destroy_fftw3_plans_dns, symObjAddr: 0x11C60, symBinAddr: 0x1000164A0, symSize: 0x10 }
+  - { offset: 0x1EC5, size: 0x8, addend: 0x0, symName: _deallocate_arrays_3d.3, symObjAddr: 0x11C70, symBinAddr: 0x1000164B0, symSize: 0x770 }
+  - { offset: 0x1EEA, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD_fftw3_backward_2d_dns, symObjAddr: 0x123E0, symBinAddr: 0x100016C20, symSize: 0x1E4 }
+  - { offset: 0x1FC1, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD_fftw3_forward_2d_dns, symObjAddr: 0x125C4, symBinAddr: 0x100016E04, symSize: 0x28 }
+  - { offset: 0x2094, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD_setup_fftw3_plans_dns, symObjAddr: 0x125EC, symBinAddr: 0x100016E2C, symSize: 0x254 }
+  - { offset: 0x213C, size: 0x8, addend: 0x0, symName: _allocate_arrays_3d.19, symObjAddr: 0x12840, symBinAddr: 0x100017080, symSize: 0x1BE8 }
+  - { offset: 0x2173, size: 0x8, addend: 0x0, symName: _MAIN__.lto_priv.0, symObjAddr: 0x14428, symBinAddr: 0x100018C68, symSize: 0x5898 }
+  - { offset: 0x2ABC, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init___iso_c_binding_C_funptr, symObjAddr: 0x361B0, symBinAddr: 0x1000282B8, symSize: 0x0 }
+  - { offset: 0x2AD3, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab___iso_c_binding_C_funptr, symObjAddr: 0x1AFD8, symBinAddr: 0x100028128, symSize: 0x0 }
+  - { offset: 0x2AFF, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init___iso_c_binding_C_ptr, symObjAddr: 0x361B8, symBinAddr: 0x1000282C0, symSize: 0x0 }
+  - { offset: 0x2B16, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab___iso_c_binding_C_ptr, symObjAddr: 0x1B010, symBinAddr: 0x100028160, symSize: 0x0 }
+  - { offset: 0x2B39, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init_fftw3_dns_module_Fftw3_dns_plans, symObjAddr: 0x1AFA8, symBinAddr: 0x1000228A0, symSize: 0x0 }
+  - { offset: 0x2B50, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab_fftw3_dns_module_Fftw3_dns_plans, symObjAddr: 0x1B048, symBinAddr: 0x100028198, symSize: 0x0 }
+  - { offset: 0x2B73, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init_fftw3_dns_module_Fftw_iodim, symObjAddr: 0x361C0, symBinAddr: 0x1000282C8, symSize: 0x0 }
+  - { offset: 0x2B8A, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab_fftw3_dns_module_Fftw_iodim, symObjAddr: 0x1B080, symBinAddr: 0x1000281D0, symSize: 0x0 }
+  - { offset: 0x2BAD, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init_fftw3_dns_module_Fftw_iodim64, symObjAddr: 0x361D0, symBinAddr: 0x1000282D8, symSize: 0x0 }
+  - { offset: 0x2BC4, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab_fftw3_dns_module_Fftw_iodim64, symObjAddr: 0x1B0B8, symBinAddr: 0x100028208, symSize: 0x0 }
+  - { offset: 0x2BE7, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init_fftw3_dns_module_Fftwf_iodim, symObjAddr: 0x361E8, symBinAddr: 0x1000282F0, symSize: 0x0 }
+  - { offset: 0x2BFE, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab_fftw3_dns_module_Fftwf_iodim, symObjAddr: 0x1B0F0, symBinAddr: 0x100028240, symSize: 0x0 }
+  - { offset: 0x2C21, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___def_init_fftw3_dns_module_Fftwf_iodim64, symObjAddr: 0x361F8, symBinAddr: 0x100028300, symSize: 0x0 }
+  - { offset: 0x2C38, size: 0x8, addend: 0x0, symName: ___fftw3_dns_module_MOD___vtab_fftw3_dns_module_Fftwf_iodim64, symObjAddr: 0x1B128, symBinAddr: 0x100028278, symSize: 0x0 }
+...

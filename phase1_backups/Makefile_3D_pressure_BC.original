@@ -1,10 +1,9 @@
-# Makefile for 3D DNS with Enhanced Optimization (Phase 1)
-# Updated to use native FFTW3 real-to-complex transforms with performance optimizations
+# Makefile for 3D DNS with Native FFTW3 Implementation
+# Updated to use native FFTW3 real-to-complex transforms
 
 F90 = gfortran
-FFLAGS = -O3 -ffast-math -funroll-loops -finline-functions \
-         -ftree-vectorize -fopenmp -g
-LIBS = -lfftw3 -llapack -lblas -lm -lgomp
+FFLAGS = -O3 -ffast-math -funroll-loops -g
+LIBS = -lfftw3 -llapack -lblas -lm
 
 # Include paths
 INCLUDES = -I/opt/homebrew/include

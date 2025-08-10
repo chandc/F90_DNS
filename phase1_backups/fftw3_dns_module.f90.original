@@ -28,7 +28,7 @@ contains
     !---------------------------------------------------------------------------
     ! SUBROUTINE: setup_fftw3_plans_dns
     !
-    ! Creates FFTW3 plans for the DNS solver FFT operations with wisdom and optimization
+    ! Creates FFTW3 plans for the DNS solver FFT operations
     !---------------------------------------------------------------------------
     subroutine setup_fftw3_plans_dns(plans, nx, ny, sample_real, sample_complex)
         implicit none
@@ -43,7 +43,6 @@ contains
         
         write(*,'(A,I0,A,I0,A)') ' Setting up FFTW3 plans for ', nx, 'x', ny, ' grid'
         write(*,'(A,I0,A,I0)') ' Complex storage: ', plans%nxhp, 'x', ny
-        write(*,'(A)') ' Using FFTW_MEASURE for optimal plan creation'
         
         ! Create forward plan: real(nx,ny) -> complex(nx/2+1,ny)
         ! Note: FFTW uses row-major ordering, so dimensions are swapped
@@ -60,7 +59,7 @@ contains
         end if
         
         plans%initialized = .true.
-        write(*,'(A)') ' FFTW3 plans created successfully with FFTW_MEASURE'
+        write(*,'(A)') ' FFTW3 plans created successfully'
         
     end subroutine setup_fftw3_plans_dns
 

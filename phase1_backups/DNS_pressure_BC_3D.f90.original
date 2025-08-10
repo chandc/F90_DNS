@@ -620,17 +620,12 @@ end subroutine setup_spectral_3d
         real(wp) :: x, y, z, pert
         
         ! Initialize with Poiseuille profile + perturbations
-        ! OPTIMIZED: Cache-friendly loop order and cached calculations
-        real(wp) :: ylen_over_ny, xlen_over_nx
-        ylen_over_ny = ylen / real(ny, wp)
-        xlen_over_nx = xlen / real(nx, wp)
-        
-        do i = 1, nx
-            x = real(i-1, wp) * xlen_over_nx
+        do k = 1, nz
+            z = zpts(k)
             do j = 1, ny
-                y = real(j-1, wp) * ylen_over_ny
-                do k = 1, nz
-                    z = zpts(k)
+                y = real(j-1, wp) * ylen / real(ny, wp)
+                do i = 1, nx
+                    x = real(i-1, wp) * xlen / real(nx, wp)
                     
                     ! Base Poiseuille flow
                     u(i,j,k) = 1.5_wp * (1.0_wp - z**2)
@@ -761,10 +756,9 @@ end subroutine setup_spectral_3d
         ! 3. Compute nonlinear terms in rotational form: S = u x omega
         ! The other term from the vector identity, grad(0.5*|u|^2), is a gradient
         ! and can be absorbed into the pressure term.
-        ! OPTIMIZED: Cache-friendly loop order (i-j-k instead of k-j-i)
-        do i = 1, nx
+        do k = 1, nz
             do j = 1, ny
-                do k = 1, nz
+                do i = 1, nx
                     su(i,j,k) = v(i,j,k) * work12(i,j,k) - w(i,j,k) * work11(i,j,k)  ! v*omega_z - w*omega_y
                     sv(i,j,k) = w(i,j,k) * work10(i,j,k) - u(i,j,k) * work12(i,j,k)  ! w*omega_x - u*omega_z
                     sw(i,j,k) = u(i,j,k) * work11(i,j,k) - v(i,j,k) * work10(i,j,k)  ! u*omega_y - v*omega_x
@@ -783,27 +777,13 @@ end subroutine setup_spectral_3d
         endif
         
         ! Add pressure gradient to x-momentum (streamwise direction)
-        ! OPTIMIZED: Move conditional outside loops and use cache-friendly order
-        if (flow_control_method == 1) then
-            ! Method 1: Constant pressure gradient
-            do i = 1, nx
-                do j = 1, ny
-                    do k = 1, nz
-                        su(i,j,k) = su(i,j,k) + current_pressure_gradient
-                    end do
+        do k = 1, nz
+            do j = 1, ny
+                do i = 1, nx
+                    su(i,j,k) = su(i,j,k) + current_pressure_gradient
                 end do
             end do
-        elseif (flow_control_method == 2) then
-            ! Method 2: PI controller - already updated above
-            do i = 1, nx
-                do j = 1, ny
-                    do k = 1, nz
-                        su(i,j,k) = su(i,j,k) + current_pressure_gradient
-                    end do
-                end do
-            end do
-        endif
-        
+        end do
         ! sv and sw remain unchanged (no y,z pressure gradients)
 
         ! NO DEALLOCATION NEEDED - workspace arrays remain allocated for reuse
@@ -1506,7 +1486,6 @@ end subroutine setup_spectral_3d
         integer, intent(in) :: istep
         integer :: i, j, k  ! Loop variables for energy calculation
         real(wp) :: umax, vmax, wmax, energy
-        real(wp) :: dx_dy_factor, u_local, v_local, w_local, zwt_local
         
         ! Compute basic diagnostics
         umax = maxval(abs(u))
@@ -1516,21 +1495,12 @@ end subroutine setup_spectral_3d
         ! Compute kinetic energy using proper LGL quadrature integration
         ! E = (1/2) ∫∫∫ (u² + v² + w²) dx dy dz
         ! For spectral methods: uniform spacing in x,y, LGL weights in z
-        ! OPTIMIZED: Cache-friendly loop order and cached calculations
         energy = 0.0_wp
-        dx_dy_factor = (xlen/real(nx,wp)) * (ylen/real(ny,wp)) * (ybar / 2.0_wp)
-        
-        do i = 1, nx
+        do k = 1, nz
             do j = 1, ny  
-                do k = 1, nz
-                    ! Cache array values to reduce memory access
-                    u_local = u(i,j,k)
-                    v_local = v(i,j,k)
-                    w_local = w(i,j,k)
-                    zwt_local = zwts(k)
-                    
-                    energy = energy + 0.5_wp * (u_local*u_local + v_local*v_local + w_local*w_local) * &
-                             dx_dy_factor * zwt_local
+                do i = 1, nx
+                    energy = energy + 0.5_wp * (u(i,j,k)**2 + v(i,j,k)**2 + w(i,j,k)**2) * &
+                             (xlen/real(nx,wp)) * (ylen/real(ny,wp)) * zwts(k) * (ybar / 2.0_wp)
                 end do
             end do
         end do
