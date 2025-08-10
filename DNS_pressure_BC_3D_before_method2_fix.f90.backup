@@ -1786,45 +1786,39 @@ end subroutine setup_spectral_3d
 !
 ! INTEGRATION:
 !   U_bulk = (1/Volume) * ∫∫∫ u(x,y,z) dx dy dz
-!   Where integration uses:
-!   - Periodic spectral integration in x and y directions (simple averaging)
-!   - LGL quadrature weights in z direction for proper integration over [-1,1]
-!
-! MATHEMATICAL FORMULATION:
-!   For periodic x,y: ∫∫ u dx dy = (Lx*Ly/(nx*ny)) * Σᵢⱼ u(i,j,k)
-!   For z: ∫ u dz = (ybar/2) * Σₖ u(i,j,k) * zwts(k)  [ybar/2 maps [-1,1] to physical]
-!   Total: U_bulk = (1/(Lx*Ly*ybar)) * ΣᵢⱼₖK u(i,j,k) * (Lx/nx) * (Ly/ny) * (ybar/2) * zwts(k)
-!          Simplifies to: U_bulk = (1/(nx*ny*2)) * ΣᵢⱼₖK u(i,j,k) * zwts(k)
+!   Where Volume = Lx * Ly * Lz, and integration uses:
+!   - Periodic spectral integration in x and y directions  
+!   - LGL quadrature weights in z direction
 !============================================================================
     subroutine calculate_bulk_velocity_3d(u_bulk)
         implicit none
         real(wp), intent(out) :: u_bulk
-        real(wp) :: volume_integral, weight_sum
+        real(wp) :: volume_integral, total_volume
         integer :: i, j, k
         
         ! Initialize
         volume_integral = 0.0_wp
-        weight_sum = 0.0_wp
+        total_volume = 0.0_wp
         
         ! Integrate over the entire 3D domain
-        ! For 3D channel flow: integrate u(x,y,z) over entire volume
+        ! In x and y: periodic, so simple averaging
+        ! In z: use LGL quadrature weights
         do k = 1, nz
             do j = 1, ny
                 do i = 1, nx
-                    ! Volume integration with proper weights:
-                    ! - x,y: periodic (uniform spacing) - simple sum
-                    ! - z: LGL quadrature weights for [-1,1] domain
+                    ! Volume element: dx * dy * dz_weighted
+                    ! Since x,y are periodic: dx = xlen/nx, dy = ylen/ny
+                    ! For z: use LGL weights (zwts already normalized)
                     volume_integral = volume_integral + u(i,j,k) * zwts(k)
+                    total_volume = total_volume + zwts(k)
                 end do
             end do
-            ! Add weight only once per k-level, not once per (i,j,k) point!
-            weight_sum = weight_sum + zwts(k)
         end do
         
-        ! Complete the integration:
-        ! - Normalize by number of x,y points for periodic average
-        ! - weight_sum normalizes the z-integration (LGL weights sum to 2 for [-1,1])
-        u_bulk = volume_integral / (real(nx*ny, wp) * weight_sum)
+        ! Complete the integration
+        ! x and y are already averaged by summing over all points
+        ! Normalize by total number of x,y points and total z weight
+        u_bulk = volume_integral / (real(nx*ny, wp) * total_volume)
         
     end subroutine calculate_bulk_velocity_3d
 
