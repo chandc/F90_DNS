@@ -4,7 +4,7 @@
 F90 = gfortran
 FFLAGS = -O3 -ffast-math -funroll-loops -finline-functions \
          -ftree-vectorize -fopenmp -g
-LIBS = -lfftw3 -llapack -lblas -lm -lgomp
+LIBS = -lfftw3_threads -lfftw3 -llapack -lblas -lm -lgomp
 
 # Include paths
 INCLUDES = -I/opt/homebrew/include

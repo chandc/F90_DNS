@@ -26,12 +26,17 @@ program dns_3d
     integer :: nx, ny, nz  ! Grid dimensions (EXTENDED: added ny)
     integer :: nxpp, nypp, nxh, nyh, nxhp, nxf, nyf, ntot, nzm
     integer :: istart, iend, nsteps, nwrt
+    integer :: restart_write_freq  ! Frequency for writing restart files
+    integer :: current_step, restart_step  ! Current step and step from restart file
+    integer :: istep, istart_loop, iend_loop  ! Time loop control variables for restart
+    real(wp) :: restart_time  ! Time from restart file
     
     ! =========================================================================
     ! 3D PHYSICAL PARAMETERS
     ! =========================================================================
     real(wp) :: alpha, beta, re, ybar, dt, time
     real(wp) :: ta, cgstol, cs, u00, wavlen  ! Additional simulation parameters
+    real(wp) :: u_centerline = 1.5_wp       ! Centerline velocity for Poiseuille profile (configurable)
     real(wp) :: xlen, ylen  ! Domain lengths (EXTENDED: added ylen)
     real(wp), parameter :: pi = 4.0_wp * atan(1.0_wp)
     logical :: use_crank_nicolson  ! Viscous scheme selection
@@ -55,11 +60,24 @@ program dns_3d
     real(wp) :: bulk_velocity_error_integral ! Accumulated error for PI controller
     real(wp) :: current_bulk_velocity     ! Current computed U_bulk
     real(wp) :: bulk_velocity_error       ! Current error for controller
+    real(wp) :: bulk_velocity_error_prev  ! Previous error for trapezoidal integration
+    
+    ! Method 2 time-averaging for display (Fix for dp/dx output)
+    real(wp) :: pressure_gradient_sum     ! Running sum for time averaging
+    integer :: pressure_gradient_count    ! Number of samples for averaging
+    real(wp) :: avg_pressure_gradient     ! Time-averaged pressure gradient for display
     
     ! =========================================================================
     ! INPUT FILE CONTROL
     ! =========================================================================
     character(len=256) :: input_filename   ! Input file name (default or from command line)
+    character(len=256) :: restart_filename ! Restart file name (for reading)
+    logical :: restart_from_file            ! Flag to enable restart from file
+    
+    ! =========================================================================
+    ! OUTPUT DIRECTORY CONTROL
+    ! =========================================================================
+    character(len=256) :: output_directory  ! Output directory for simulation results
     
     ! =========================================================================
     ! 3D SPECTRAL ARRAYS
@@ -104,6 +122,7 @@ program dns_3d
     ! TIMING VARIABLES (for performance monitoring and divergence correlation)
     ! =========================================================================
     real(wp) :: step_start_time, step_end_time, step_duration
+    real(wp) :: start_time, final_time, total_wall_time  ! Added for final summary
     real(wp) :: total_sim_time = 0.0_wp
     real(wp) :: min_step_time = huge(1.0_wp)
     real(wp) :: max_step_time = 0.0_wp
@@ -158,15 +177,105 @@ program dns_3d
     ! Setup boundary conditions
     call setup_boundary_conditions_3d()
     
-    ! Main time loop
-    write(*,'(A)') ' Starting main time integration...'
-    do istart = 1, nsteps
-        call cpu_time(step_start_time)
+    ! Initialize output files
+    call initialize_output_files()
+    
+    ! Create simulation summary
+    call write_simulation_summary()
+    
+    ! =====================================================================================
+    ! RESTART DETECTION AND INITIALIZATION (Phase 3 + 4 Enhanced)
+    ! =====================================================================================
+    
+    ! Initialize restart variables
+    current_step = 0
+    
+    ! Check for restart: either requested via command line or automatic detection
+    if (restart_from_file) then
+        ! Command line restart requested
+        write(*,'(A,A)') ' Command line restart requested from: ', trim(restart_filename)
         
-        time = real(istart, wp) * dt
+    else
+        ! Check for automatic restart file detection
+        restart_filename = 'restart.dat'  ! Reset to default for auto-detection
+        
+    endif
+    
+    ! Try to read restart file (either specified or auto-detected)
+    call read_restart_file_3d(restart_step, restart_time, restart_from_file)
+    
+    if (restart_from_file) then
+        ! Restart from file succeeded
+        current_step = restart_step
+        time = restart_time
+        write(*,'(A)') ' ============================================'
+        write(*,'(A)') '   RESTARTING FROM CHECKPOINT'
+        write(*,'(A,A)') '   Restart file:  ', trim(restart_filename)
+        write(*,'(A,I0)') '   Restart step:  ', restart_step
+        write(*,'(A,F12.6)') '   Restart time:  ', restart_time
+        write(*,'(A,I0)') '   Remaining steps: ', nsteps - restart_step
+        
+        ! Enhanced restart validation (Phase 4)
+        if (restart_step >= nsteps) then
+            write(*,'(A)') ' ============================================'
+            write(*,'(A)') '   SIMULATION ALREADY COMPLETE'
+            write(*,'(A,I0)') '   Restart step: ', restart_step
+            write(*,'(A,I0)') '   Target steps: ', nsteps
+            write(*,'(A)') '   Use larger nsteps to continue simulation.'
+            write(*,'(A)') ' ============================================'
+            stop
+        endif
+        
+        write(*,'(A)') ' ============================================'
+        
+    else
+        ! Start from scratch
+        write(*,'(A)') ' ============================================'
+        write(*,'(A)') '   STARTING NEW SIMULATION'
+        if (restart_from_file) then
+            write(*,'(A,A)') '   Restart file not found: ', trim(restart_filename)
+        else
+            write(*,'(A)') '   No restart requested'
+        endif
+        write(*,'(A)') ' ============================================'
+        time = 0.0_wp
+        restart_from_file = .false.  ! Reset flag for clarity
+    endif
+    
+    ! Initialize timing for performance monitoring
+    call cpu_time(start_time)
+    
+    ! Main time loop (modified for restart capability)
+    write(*,'(A)') ' Starting main time integration...'
+    
+    ! Calculate starting and ending step numbers
+    istart_loop = current_step + 1  ! Start from next step if restarting
+    iend_loop = nsteps
+    
+    do istep = istart_loop, iend_loop
+        call cpu_time(step_start_time)
+        current_step = istep
+        
+        ! Update time (either from restart time or from zero)
+        if (restart_from_file .and. istep == istart_loop) then
+            ! First step after restart: time already set correctly
+            time = restart_time + dt
+        else
+            ! Normal time advancement
+            time = time + dt
+        endif
         
         ! Store previous velocities
         un = u; vn = v; wn = w
+        
+        ! =========================================================================
+        ! RESTART FILE WRITING (Phase 3)
+        ! =========================================================================
+        
+        ! Write restart file at specified frequency
+        if (mod(istep, restart_write_freq) == 0) then
+            call write_restart_file_3d(istep, time)
+        endif
         
         ! FRACTIONAL STEP METHOD
         
@@ -186,13 +295,21 @@ program dns_3d
         call apply_boundary_conditions_3d()
         
         ! Output diagnostics
-        if (mod(istart, nwrt) == 0) then
-            call output_diagnostics_3d(istart)
+        if (mod(istep, nwrt) == 0) then
+            call output_diagnostics_3d(istep)
+            call write_time_series_data(istep)
+            call write_flow_statistics(istep)
+            
+            ! Write velocity field snapshots less frequently (every 10*nwrt steps)
+            if (mod(istep, 10*nwrt) == 0) then
+                call write_velocity_field_snapshot(istep)
+                call write_spanwise_averaged_profile(istep)
+            endif
         endif
         
         ! Check divergence
-        if (mod(istart, 50) == 0) then
-            call check_divergence_3d(istart)
+        if (mod(istep, 50) == 0) then
+            call check_divergence_3d(istep)
         endif
         
         ! Complete step timing and update statistics
@@ -203,14 +320,75 @@ program dns_3d
         total_sim_time = total_sim_time + step_duration
         min_step_time = min(min_step_time, step_duration)
         max_step_time = max(max_step_time, step_duration)
-        avg_step_time = total_sim_time / real(istart, wp)
+        avg_step_time = total_sim_time / real(istep, wp)
         
         ! Print timing summary every N steps
-        if (mod(istart, timing_interval) == 0) then
-            call print_step_timing(istart, step_duration, avg_step_time, &
+        if (mod(istep, timing_interval) == 0) then
+            call print_step_timing(istep, step_duration, avg_step_time, &
                                   min_step_time, max_step_time, max_divergence)
         endif
     end do
+    
+    ! ========================================================================
+    ! FINAL RESTART FILE (Phase 3)
+    ! ========================================================================
+    ! Always write final restart file for potential continuation
+    call write_restart_file_3d(nsteps, time)
+    
+    ! ========================================================================
+    !                           SIMULATION COMPLETED
+    ! ========================================================================
+    write(*,'(A)') ' ========================================================'
+    write(*,'(A)') '               SIMULATION COMPLETED SUCCESSFULLY'
+    write(*,'(A)') ' ========================================================'
+    write(*,'(A)')
+    
+    ! Final timing and performance summary
+    call cpu_time(final_time)
+    total_wall_time = final_time - start_time
+    
+    write(*,'(A)') ' FINAL PERFORMANCE SUMMARY:'
+    write(*,'(A)') ' ----------------------------------------'
+    write(*,'(A,F12.6,A)') ' Total simulation time:   ', time, ' (non-dimensional)'
+    write(*,'(A,I0,A)')     ' Total time steps:       ', nsteps, ' steps'
+    write(*,'(A,F10.3,A)')  ' Total wall clock time:  ', total_wall_time, ' seconds'
+    write(*,'(A,F10.6,A)')  ' Average time per step:  ', avg_step_time, ' seconds'
+    write(*,'(A,F10.6,A)')  ' Fastest step time:      ', min_step_time, ' seconds'
+    write(*,'(A,F10.6,A)')  ' Slowest step time:      ', max_step_time, ' seconds'
+    if (total_wall_time > 0.0) then
+        write(*,'(A,F8.1,A)') ' Performance:            ', real(nsteps)/total_wall_time, ' steps/second'
+    endif
+    write(*,'(A)')
+    
+    ! Final simulation information
+    write(*,'(A)') ' FINAL SIMULATION STATE:'
+    write(*,'(A)') ' ----------------------------------------'
+    write(*,'(A,F12.6)')    ' Final time:             ', time
+    write(*,'(A,I0)')       ' Time steps completed:   ', nsteps
+    write(*,'(A,ES12.4)')   ' Max divergence:         ', max_divergence
+    if (flow_control_method == 2) then
+        write(*,'(A,F10.6)') ' Final bulk velocity:    ', current_bulk_velocity
+        ! Use time-averaged pressure gradient for Method 2 (Fix)
+        write(*,'(A,ES12.4)') ' Final pressure gradient:', avg_pressure_gradient
+    endif
+    write(*,'(A)')
+    
+    ! Output files summary
+    write(*,'(A)') ' OUTPUT FILES GENERATED:'
+    write(*,'(A)') ' ----------------------------------------'
+    write(*,'(A,A)')       ' Output directory:       ', trim(output_directory)
+    write(*,'(A)')         ' Files created:'
+    write(*,'(A)')         '   ✓ output_time_series.dat    (time evolution data)'
+    write(*,'(A)')         '   ✓ flow_statistics.dat       (final flow statistics)'
+    write(*,'(A)')         '   ✓ simulation_summary.txt    (run parameters)'
+    write(*,'(A)')         '   ✓ velocity_field snapshots  (periodic velocity data)'
+    write(*,'(A)')         '   ✓ spanwise_profile data     (wall-normal profiles)'
+    write(*,'(A)')
+    
+    write(*,'(A)') ' ========================================================'
+    write(*,'(A)') '      3D DNS SIMULATION ANALYSIS READY FOR PROCESSING'
+    write(*,'(A)') ' ========================================================'
+    write(*,'(A)')
     
     write(*,'(A)') ' Time integration completed successfully!'
     write(*,'(A)') ' ============================================'
@@ -235,48 +413,85 @@ contains
 !============================================================================
     subroutine process_command_line_args()
         implicit none
-        integer :: num_args
+        integer :: num_args, i
         character(len=256) :: arg
+        logical :: restart_requested = .false.
         
-        ! Set default input filename
+        ! Set default input filename and restart settings
         input_filename = 'input_3d.dat'
+        restart_filename = 'restart.dat'
+        restart_from_file = .false.
         
         ! Get number of command line arguments
         num_args = command_argument_count()
         
         if (num_args == 0) then
-            ! No arguments - use default
+            ! No arguments - use defaults
             write(*,'(A,A)') ' Using default input file: ', trim(input_filename)
             
-        elseif (num_args == 1) then
-            ! One argument - either filename or --help
-            call get_command_argument(1, arg)
-            
-            if (trim(arg) == '--help' .or. trim(arg) == '-h') then
-                write(*,'(A)') ' '
-                write(*,'(A)') ' USAGE:'
-                write(*,'(A)') '   ./dns_3d_pressure_bc [input_file.dat] [--help]'
-                write(*,'(A)') ' '
-                write(*,'(A)') ' ARGUMENTS:'
-                write(*,'(A)') '   input_file.dat  : Specify input file (default: input_3d.dat)'
-                write(*,'(A)') '   --help, -h      : Show this help message'
-                write(*,'(A)') ' '
-                write(*,'(A)') ' EXAMPLES:'
-                write(*,'(A)') '   ./dns_3d_pressure_bc                     # Use input_3d.dat'
-                write(*,'(A)') '   ./dns_3d_pressure_bc input_3d_method2.dat # Use specified file'
-                write(*,'(A)') ' '
-                stop
-            else
-                ! Treat as filename
-                input_filename = trim(arg)
-                write(*,'(A,A)') ' Using specified input file: ', trim(input_filename)
-            endif
-            
         else
-            ! Too many arguments
-            write(*,'(A)') ' ERROR: Too many command line arguments'
-            write(*,'(A)') ' Use --help for usage information'
-            stop
+            ! Process all arguments
+            i = 1
+            do while (i <= num_args)
+                call get_command_argument(i, arg)
+                
+                if (trim(arg) == '--help' .or. trim(arg) == '-h') then
+                    write(*,'(A)') ' '
+                    write(*,'(A)') ' USAGE:'
+                    write(*,'(A)') '   ./dns_3d_pressure_bc [options] [input_file.dat]'
+                    write(*,'(A)') ' '
+                    write(*,'(A)') ' OPTIONS:'
+                    write(*,'(A)') '   --restart [file]    : Restart from checkpoint file (default: restart.dat)'
+                    write(*,'(A)') '   --help, -h          : Show this help message'
+                    write(*,'(A)') ' '
+                    write(*,'(A)') ' ARGUMENTS:'
+                    write(*,'(A)') '   input_file.dat      : Specify input file (default: input_3d.dat)'
+                    write(*,'(A)') ' '
+                    write(*,'(A)') ' EXAMPLES:'
+                    write(*,'(A)') '   ./dns_3d_pressure_bc                      # New simulation, input_3d.dat'
+                    write(*,'(A)') '   ./dns_3d_pressure_bc --restart            # Restart from restart.dat'
+                    write(*,'(A)') '   ./dns_3d_pressure_bc --restart custom.dat # Restart from custom.dat'
+                    write(*,'(A)') '   ./dns_3d_pressure_bc input_method2.dat    # New simulation, custom input'
+                    write(*,'(A)') '   ./dns_3d_pressure_bc --restart input_method2.dat # Restart, custom input'
+                    write(*,'(A)') ' '
+                    stop
+                    
+                elseif (trim(arg) == '--restart') then
+                    restart_requested = .true.
+                    ! Check if next argument is a restart filename
+                    if (i + 1 <= num_args) then
+                        call get_command_argument(i + 1, arg)
+                        ! If next arg doesn't start with --, it's the restart filename
+                        if (arg(1:2) /= '--' .and. index(arg, '.dat') > 0) then
+                            restart_filename = trim(arg)
+                            i = i + 1  ! Skip next argument as we used it
+                            write(*,'(A,A)') ' Restart requested from file: ', trim(restart_filename)
+                        else
+                            write(*,'(A,A)') ' Restart requested from default file: ', trim(restart_filename)
+                        endif
+                    else
+                        write(*,'(A,A)') ' Restart requested from default file: ', trim(restart_filename)
+                    endif
+                    
+                elseif (index(arg, '.dat') > 0) then
+                    ! Assume it's an input filename
+                    input_filename = trim(arg)
+                    write(*,'(A,A)') ' Using specified input file: ', trim(input_filename)
+                    
+                else
+                    write(*,'(A,A)') ' ERROR: Unknown argument: ', trim(arg)
+                    write(*,'(A)') ' Use --help for usage information'
+                    stop
+                endif
+                
+                i = i + 1
+            end do
+        endif
+        
+        ! Set restart flag based on command line
+        if (restart_requested) then
+            restart_from_file = .true.
+            write(*,'(A)') ' Command line restart mode enabled'
         endif
         
     end subroutine process_command_line_args
@@ -311,8 +526,8 @@ contains
         integer :: io_status  ! Local I/O status variable (avoids shadowing global nx)
         
         namelist /grid/ nx_input, ny_input, nz_input
-        namelist /time_control/ istart, dt, nsteps, nwrt
-        namelist /simulation/ re, alpha, beta, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen, use_crank_nicolson
+        namelist /time_control/ istart, dt, nsteps, nwrt, restart_write_freq
+        namelist /simulation/ re, alpha, beta, ta, ybar, cgstol, cs, u00, wavlen, xlen, ylen, use_crank_nicolson, u_centerline
         namelist /output/ iform, iles
         namelist /flow_control/ flow_control_method, target_pressure_gradient, &
                                target_bulk_velocity, controller_gain, controller_update_freq
@@ -320,6 +535,7 @@ contains
         ! Default values
         nx_input = 128; ny_input = 32; nz_input = 33
         istart = 0; nsteps = 1000; nwrt = 100
+        restart_write_freq = 1000  ! Default restart write frequency (as requested)
         re = 180.0_wp; dt = 0.01_wp; alpha = 1.0_wp; beta = 1.0_wp
         ta = 0.0_wp; ybar = 2.0_wp; cgstol = 1e-6_wp; cs = 0.1_wp
         u00 = 0.0_wp; wavlen = 1.0_wp
@@ -355,6 +571,13 @@ contains
         
         nx = nx_input; ny = ny_input; nz = nz_input
         
+        ! Initialize restart variables
+        restart_filename = 'restart.dat'  ! Default restart filename (as requested)
+        restart_from_file = .false.       ! By default, start from scratch
+        current_step = 0                  ! Will be updated if restarting
+        restart_step = 0                  ! Step number from restart file
+        restart_time = 0.0_wp             ! Time from restart file
+        
         ! Initialize dynamic flow control values
         current_pressure_gradient = target_pressure_gradient
         
@@ -362,6 +585,12 @@ contains
         current_bulk_velocity = 0.0_wp
         bulk_velocity_error = 0.0_wp
         bulk_velocity_error_integral = 0.0_wp
+        bulk_velocity_error_prev = 0.0_wp  ! Initialize for trapezoidal integration
+        
+        ! Initialize time-averaging for Method 2 pressure gradient display (Fix)
+        pressure_gradient_sum = 0.0_wp
+        pressure_gradient_count = 0
+        avg_pressure_gradient = target_pressure_gradient  ! Initial value
         
         ! ========================================================================
         ! PARAMETER VALIDATION - Check for physically reasonable values
@@ -589,6 +818,9 @@ end subroutine setup_spectral_3d
         allocate(sample_real(nx, ny), sample_complex(nxhp, ny), stat=alloc_status)
         if (alloc_status /= 0) stop 'Error allocating FFT samples'
         
+        ! Initialize FFTW threading for parallel performance
+        call fftw3_initialize_threading()
+        
         call setup_fftw3_plans_dns(plans, nx, ny, sample_real, sample_complex)
         
         write(*,'(A)') ' All 3D arrays allocated successfully'
@@ -632,8 +864,8 @@ end subroutine setup_spectral_3d
                 do k = 1, nz
                     z = zpts(k)
                     
-                    ! Base Poiseuille flow
-                    u(i,j,k) = 1.5_wp * (1.0_wp - z**2)
+                    ! Base Poiseuille flow (configurable centerline velocity)
+                    u(i,j,k) = u_centerline * (1.0_wp - z**2)
                     v(i,j,k) = 0.0_wp  ! NEW: initialized spanwise velocity
                     w(i,j,k) = 0.0_wp
                     ! Initialize pressure field to zero (following 2D implementation)
@@ -761,7 +993,8 @@ end subroutine setup_spectral_3d
         ! 3. Compute nonlinear terms in rotational form: S = u x omega
         ! The other term from the vector identity, grad(0.5*|u|^2), is a gradient
         ! and can be absorbed into the pressure term.
-        ! OPTIMIZED: Cache-friendly loop order (i-j-k instead of k-j-i)
+        ! OPTIMIZED: Cache-friendly loop order (i-j-k instead of k-j-i) with OpenMP
+        !$OMP PARALLEL DO PRIVATE(i, j, k)
         do i = 1, nx
             do j = 1, ny
                 do k = 1, nz
@@ -771,6 +1004,7 @@ end subroutine setup_spectral_3d
                 end do
             end do
         end do
+        !$OMP END PARALLEL DO
 
         ! Apply flow control forcing (following 2D implementation)
         if (flow_control_method == 1) then
@@ -783,9 +1017,10 @@ end subroutine setup_spectral_3d
         endif
         
         ! Add pressure gradient to x-momentum (streamwise direction)
-        ! OPTIMIZED: Move conditional outside loops and use cache-friendly order
+        ! OPTIMIZED: Move conditional outside loops and use cache-friendly order with OpenMP
         if (flow_control_method == 1) then
             ! Method 1: Constant pressure gradient
+            !$OMP PARALLEL DO PRIVATE(i, j, k)
             do i = 1, nx
                 do j = 1, ny
                     do k = 1, nz
@@ -793,8 +1028,10 @@ end subroutine setup_spectral_3d
                     end do
                 end do
             end do
+            !$OMP END PARALLEL DO
         elseif (flow_control_method == 2) then
             ! Method 2: PI controller - already updated above
+            !$OMP PARALLEL DO PRIVATE(i, j, k)
             do i = 1, nx
                 do j = 1, ny
                     do k = 1, nz
@@ -802,6 +1039,7 @@ end subroutine setup_spectral_3d
                     end do
                 end do
             end do
+            !$OMP END PARALLEL DO
         endif
         
         ! sv and sw remain unchanged (no y,z pressure gradients)
@@ -994,10 +1232,12 @@ end subroutine setup_spectral_3d
 
         ! 1. Transform RHS and BCs to spectral space
         bc1_temp = bc1; bc2_temp = bc2
+        !$OMP PARALLEL DO PRIVATE(rhs_in_slice)
         do k = 1, nz
             rhs_in_slice = rhs_in(:,:,k)
             call fftw3_forward_2d_dns(plans, rhs_in_slice, rhs_hat(1:nxhp, 1:ny, k))
         end do
+        !$OMP END PARALLEL DO
         call fftw3_forward_2d_dns(plans, bc1_temp, bc1_hat)
         call fftw3_forward_2d_dns(plans, bc2_temp, bc2_hat)
 
@@ -1006,11 +1246,13 @@ end subroutine setup_spectral_3d
 
         stiffness_matrix = 0.0_wp
 
+        !$OMP PARALLEL DO PRIVATE(k, n)
         do n = 1, nz
           do k = 1, nz
               stiffness_matrix(k,n) = sum(d1(:,k) * d1(:,n) * zwts(:)) * (2.0_wp / ybar)
           end do
         end do
+        !$OMP END PARALLEL DO
 
         ! 2. Loop over all horizontal wavenumbers
         do j = 1, ny  ! CORRECTED: loop to ny not nyhp
@@ -1051,9 +1293,11 @@ end subroutine setup_spectral_3d
         end do
 
         ! 7. Transform solution back to physical space
+        !$OMP PARALLEL DO
         do k = 1, nz
             call fftw3_backward_2d_dns(plans, f_hat(1:nxhp, 1:ny, k), f_out(:,:,k))
         end do
+        !$OMP END PARALLEL DO
 
         deallocate(rhs_hat, f_hat, helmholtz_matrix, sol_z, ipiv)
         deallocate(bc1_hat, bc2_hat, bc1_temp, bc2_temp, rhs_in_slice)
@@ -1115,13 +1359,14 @@ end subroutine setup_spectral_3d
 
         z_scale = 2.0_wp / ybar
 
-        ! 1. Transform the field f_in to spectral space f_hat (slice by slice)
+        ! 1. Transform the field f_in to spectral space f_hat (slice by slice) 
         do k = 1, nz
             f_slice = f_in(:,:,k)
             call fftw3_forward_2d_dns(plans, f_slice, f_hat(1:nxhp, 1:ny, k))
         end do
 
-        ! 2. Compute the Laplacian in spectral space for each (kx, ky) pair
+        ! 2. Compute the Laplacian in spectral space for each (kx, ky) pair with OpenMP
+        !$OMP PARALLEL DO PRIVATE(i, j)
         do j = 1, ny  ! CORRECTED: loop to ny not nyhp
             do i = 1, nxhp
                 ! Apply d²/dz² to the vector of z-coefficients with CORRECT scaling
@@ -1131,11 +1376,14 @@ end subroutine setup_spectral_3d
                 lap_hat(i,j,:) = lap_hat(i,j,:) - (xsq(i) + ysq(j)) * f_hat(i,j,:)
             end do
         end do
+        !$OMP END PARALLEL DO
 
         ! 3. Transform the result lap_hat back to physical space
+        !$OMP PARALLEL DO
         do k = 1, nz
             call fftw3_backward_2d_dns(plans, lap_hat(1:nxhp, 1:ny, k), laplacian(:,:,k))
         end do
+        !$OMP END PARALLEL DO
 
         deallocate(f_hat, lap_hat, f_slice)
     end subroutine compute_laplacian_3d
@@ -1540,12 +1788,14 @@ end subroutine setup_spectral_3d
         if (flow_control_method == 2) then
             ! Calculate and display bulk velocity for Method 2
             call calculate_bulk_velocity_3d(current_bulk_velocity)
-            write(*,'(A,I6,A,F8.5,A,5(ES12.4,A),F8.5,A)') &
+            ! Show ACTUAL pressure gradient used in momentum equation (not time-averaged)
+            write(*,'(A,I6,A,F12.6,A,5(ES12.4,A),F8.5,A,ES12.4)') &
                 ' Step ', istep, ', t=', time, &
                 ', |u|max=', umax, ', |v|max=', vmax, ', |w|max=', wmax, ', E=', energy, &
-                ', dP/dx=', current_pressure_gradient, ', U_bulk=', current_bulk_velocity
+                ', dP/dx=', current_pressure_gradient, ', U_bulk=', current_bulk_velocity, &
+                ', dP/dx_avg=', avg_pressure_gradient
         else
-            write(*,'(A,I6,A,F8.5,A,5(ES12.4,A))') &
+            write(*,'(A,I6,A,F12.6,A,5(ES12.4,A))') &
                 ' Step ', istep, ', t=', time, &
                 ', |u|max=', umax, ', |v|max=', vmax, ', |w|max=', wmax, ', E=', energy, &
                 ', dP/dx=', current_pressure_gradient
@@ -1743,39 +1993,41 @@ end subroutine setup_spectral_3d
         ! The derivative scaling is dz'/dz = 2/(b-a). Here, b-a = ybar.
         z_scale = 2.0_wp / ybar
 
-        ! Z-derivative (LGL)
+        ! Z-derivative (LGL) with OpenMP parallelization
         if (do_dz) then
             if (.not. present(dfdz)) stop 'dfdz must be provided when calc_dz is true'
             dfdz = 0.0_wp
+            !$OMP PARALLEL DO PRIVATE(i, j)
             do j = 1, ny
                 do i = 1, nx
                     dfdz(i,j,:) = z_scale * matmul(d1, f_in(i,j,:))
                 end do
             end do
+            !$OMP END PARALLEL DO
         endif
 
-        ! X and Y derivatives (FFT)
+        ! X and Y derivatives (FFT) with OpenMP parallelization
         if (do_dx .or. do_dy) then
             if (do_dx .and. .not. present(dfdx)) stop 'dfdx must be provided when calc_dx is true'
             if (do_dy .and. .not. present(dfdy)) stop 'dfdy must be provided when calc_dy is true'
 
-            allocate(f_hat(nxhp, ny))  ! CORRECTED: ny not nyhp
-            allocate(f_slice(nx,ny))
-            if (do_dx) then
-                allocate(dfdx_hat(nxhp, ny), dfdx_slice(nx,ny))  ! CORRECTED: ny not nyhp
-                dfdx = 0.0_wp
-            endif
-            if (do_dy) then
-                allocate(dfdy_hat(nxhp, ny), dfdy_slice(nx,ny))  ! CORRECTED: ny not nyhp
-                dfdy = 0.0_wp
-            endif
+            if (do_dx) dfdx = 0.0_wp
+            if (do_dy) dfdy = 0.0_wp
 
+            !$OMP PARALLEL PRIVATE(k, f_slice, f_hat, dfdx_hat, dfdy_hat, dfdx_slice, dfdy_slice, i, j)
+            ! Each thread needs its own workspace
+            allocate(f_hat(nxhp, ny))
+            allocate(f_slice(nx,ny))
+            if (do_dx) allocate(dfdx_hat(nxhp, ny), dfdx_slice(nx,ny))
+            if (do_dy) allocate(dfdy_hat(nxhp, ny), dfdy_slice(nx,ny))
+
+            !$OMP DO
             do k = 1, nz
                 f_slice = f_in(:,:,k)
                 call fftw3_forward_2d_dns(plans, f_slice, f_hat)
 
                 if (do_dx) then
-                    do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+                    do j = 1, ny
                         do i = 1, nxhp
                             dfdx_hat(i,j) = f_hat(i,j) * cmplx(0.0_wp, xw(i), kind=wp)
                         end do
@@ -1785,7 +2037,7 @@ end subroutine setup_spectral_3d
                 endif
 
                 if (do_dy) then
-                    do j = 1, ny  ! CORRECTED: loop to ny not nyhp
+                    do j = 1, ny
                         do i = 1, nxhp
                             dfdy_hat(i,j) = f_hat(i,j) * cmplx(0.0_wp, yw(j), kind=wp)
                         end do
@@ -1794,10 +2046,12 @@ end subroutine setup_spectral_3d
                     dfdy(:,:,k) = dfdy_slice
                 endif
             end do
+            !$OMP END DO
 
             deallocate(f_hat, f_slice)
             if (do_dx) deallocate(dfdx_hat, dfdx_slice)
             if (do_dy) deallocate(dfdy_hat, dfdy_slice)
+            !$OMP END PARALLEL
         endif
     end subroutine compute_derivatives_3d
 
@@ -1859,62 +2113,749 @@ end subroutine setup_spectral_3d
     end subroutine calculate_bulk_velocity_3d
 
 !============================================================================
-! SUBROUTINE: update_pressure_gradient_3d
+! SUBROUTINE: update_pressure_gradient_3d (POSITIONAL PI CONTROLLER)
 !
 ! PURPOSE:
-!   Updates the pressure gradient using PI controller for Method 2 flow control.
-!   Adjusts the driving pressure gradient to maintain target bulk velocity.
+!   Updates the pressure gradient using a positional PI controller with
+!   anti-windup protection for Method 2 flow control.
+!   Based on the working 2D implementation.
 !
-! CONTROLLER EQUATION:
-!   ΔP/Δx = Kp * error + Ki * ∫error dt
-!   where error = U_target - U_current
+! CONTROLLER EQUATION (POSITIONAL):
+!   pressure_gradient = base_value + Kp * error + Ki * ∫error dt
+!   where base_value = 3.0/Re (theoretical channel flow pressure gradient)
+!   and error = U_target - U_current
+!
+! ANTI-WINDUP:
+!   Integral term is only updated when controller output is not clamped.
 !
 ! INPUTS:
 !   istep - Current time step number
 !   
 ! SIDE EFFECTS:
-!   Updates current_pressure_gradient based on bulk velocity error
-!   Updates bulk_velocity_error_integral for next iteration
+!   Updates current_pressure_gradient using positional control
 !============================================================================
     subroutine update_pressure_gradient_3d(istep)
         implicit none
         integer, intent(in) :: istep
+        real(wp) :: kp, ki
         real(wp) :: proportional_term, integral_term
-        real(wp) :: kp, ki  ! Controller gains
-        
+        real(wp) :: pressure_gradient_unclamped, pressure_gradient_clamped
+        real(wp) :: base_pressure_gradient
+        real(wp), parameter :: ki_ratio = 0.05_wp ! Ratio of Ki to Kp (IDENTICAL TO 2D)
+
         ! Only update at specified frequency
         if (mod(istep, controller_update_freq) /= 0) return
-        
-        ! Calculate current bulk velocity
+
+        ! 1. Calculate current bulk velocity
         call calculate_bulk_velocity_3d(current_bulk_velocity)
-        
-        ! Compute error
+
+        ! 2. Calculate error
         bulk_velocity_error = target_bulk_velocity - current_bulk_velocity
-        
-        ! PI controller gains (based on 2D implementation)
-        kp = controller_gain      ! Proportional gain
-        ki = controller_gain * 0.1_wp  ! Integral gain (10% of proportional)
-        
-        ! Compute PI terms
+
+        ! 3. Define controller gains (IDENTICAL TO 2D)
+        kp = controller_gain
+        ki = ki_ratio * controller_gain
+
+        ! 4. Calculate theoretical base pressure gradient for channel flow
+        base_pressure_gradient = 3.0_wp / re
+
+        ! 5. Calculate proportional and integral terms
         proportional_term = kp * bulk_velocity_error
         integral_term = ki * bulk_velocity_error_integral
-        
-        ! Update pressure gradient
-        current_pressure_gradient = proportional_term + integral_term
-        
-        ! Clamp to reasonable bounds to prevent instability
-        if (current_pressure_gradient > 10.0_wp) then
-            current_pressure_gradient = 10.0_wp
-        elseif (current_pressure_gradient < -10.0_wp) then
-            current_pressure_gradient = -10.0_wp
+
+        ! 6. Calculate new pressure gradient using positional control (IDENTICAL TO 2D)
+        pressure_gradient_unclamped = base_pressure_gradient + proportional_term + integral_term
+
+        ! 7. Apply safety limits (IDENTICAL TO 2D)
+        pressure_gradient_clamped = max(0.0_wp, min(10.0_wp, pressure_gradient_unclamped))
+
+        ! 8. Conditionally update the integral using TRAPEZOIDAL RULE (IMPROVED INTEGRATION)
+        !    Only accumulate error if the controller is NOT saturated/clamped.
+        if (abs(pressure_gradient_clamped - pressure_gradient_unclamped) < 1.0e-12_wp) then
+            ! Trapezoidal integration: I(n+1) = I(n) + 0.5*dt*(e(n) + e(n+1))
+            ! For first step (istep=1), fall back to Euler method since we don't have e(n-1)
+            if (istep <= controller_update_freq) then
+                ! First step: use Euler method
+                bulk_velocity_error_integral = bulk_velocity_error_integral + bulk_velocity_error * dt
+            else
+                ! Subsequent steps: use trapezoidal rule
+                bulk_velocity_error_integral = bulk_velocity_error_integral + &
+                    0.5_wp * dt * (bulk_velocity_error_prev + bulk_velocity_error)
+            endif
         endif
-        
-        ! Update integral term (accumulate error over time)
-        if (abs(bulk_velocity_error) > 1.0e-12_wp) then
-            bulk_velocity_error_integral = bulk_velocity_error_integral + bulk_velocity_error * dt
-        endif
-        
+
+        ! 9. Store current error for next time step (trapezoidal rule requirement)
+        bulk_velocity_error_prev = bulk_velocity_error
+
+        ! 10. Set the final pressure gradient to the clamped value
+        current_pressure_gradient = pressure_gradient_clamped
+
+        ! 11. Update the running average for smoother output
+        pressure_gradient_sum = pressure_gradient_sum + current_pressure_gradient
+        pressure_gradient_count = pressure_gradient_count + 1
+        avg_pressure_gradient = pressure_gradient_sum / real(pressure_gradient_count, wp)
+
     end subroutine update_pressure_gradient_3d
+
+!============================================================================
+! SUBROUTINE: create_output_directory
+!
+! PURPOSE:
+!   Create output directory for simulation results with timestamp
+!============================================================================
+    subroutine create_output_directory()
+        implicit none
+        character(len=256) :: base_name, timestamp, mkdir_command
+        character(len=10) :: date_str, time_str
+        integer :: iostat
+        
+        ! Get current date and time
+        call date_and_time(date_str, time_str)
+        
+        ! Extract base name from input file (remove extension)
+        base_name = trim(input_filename)
+        if (index(base_name, '.dat') > 0) then
+            base_name = base_name(1:index(base_name, '.dat')-1)
+        endif
+        
+        ! Create timestamp: YYYYMMDD_HHMMSS
+        timestamp = date_str(1:4) // date_str(5:6) // date_str(7:8) // '_' // &
+                   time_str(1:2) // time_str(3:4) // time_str(5:6)
+        
+        ! Create output directory name
+        output_directory = trim(base_name) // '_' // trim(timestamp)
+        
+        ! Create directory using system command
+        mkdir_command = 'mkdir -p ' // trim(output_directory)
+        call system(trim(mkdir_command))
+        
+        write(*,'(A)') ' Output directory created:'
+        write(*,'(A,A)') '   ', trim(output_directory)
+        
+    end subroutine create_output_directory
+
+!============================================================================
+! SUBROUTINE: write_simulation_summary
+!
+! PURPOSE:
+!   Write simulation parameters and configuration to summary file
+!============================================================================
+    subroutine write_simulation_summary()
+        implicit none
+        character(len=512) :: filepath
+        character(len=10) :: date_str, time_str
+        
+        ! Get current date and time
+        call date_and_time(date_str, time_str)
+        
+        filepath = trim(output_directory) // '/simulation_summary.txt'
+        open(unit=14, file=trim(filepath), status='replace')
+        
+        write(14,'(A)') '============================================'
+        write(14,'(A)') '   3D DNS SIMULATION SUMMARY'
+        write(14,'(A)') '============================================'
+        write(14,'(A)') ' '
+        write(14,'(A,A)') ' Input file: ', trim(input_filename)
+        write(14,'(A,A)') ' Output directory: ', trim(output_directory)
+        write(14,'(A,A,A,A,A,A)') ' Start time: ', date_str(1:4), '-', date_str(5:6), '-', date_str(7:8)
+        write(14,'(A,A,A,A,A,A)') '             ', time_str(1:2), ':', time_str(3:4), ':', time_str(5:6)
+        write(14,'(A)') ' '
+        write(14,'(A)') ' GRID PARAMETERS:'
+        write(14,'(A,I0,A,I0,A,I0)') '   Grid size: ', nx, ' × ', ny, ' × ', nz
+        write(14,'(A,F8.4)') '   Domain Lx: ', xlen
+        write(14,'(A,F8.4)') '   Domain Ly: ', ylen
+        write(14,'(A,F8.4)') '   Domain Lz: ', ybar
+        write(14,'(A)') ' '
+        write(14,'(A)') ' SIMULATION PARAMETERS:'
+        write(14,'(A,F10.4)') '   Reynolds number: ', re
+        write(14,'(A,F10.6)') '   Time step: ', dt
+        write(14,'(A,I0)') '   Total steps: ', nsteps
+        write(14,'(A,I0)') '   Output frequency: ', nwrt
+        write(14,'(A,F10.4)') '   Total time: ', real(nsteps, wp) * dt
+        write(14,'(A)') ' '
+        write(14,'(A)') ' FLOW CONTROL:'
+        write(14,'(A,I0)') '   Method: ', flow_control_method
+        if (flow_control_method == 2) then
+            write(14,'(A,F10.6)') '   Target bulk velocity: ', target_bulk_velocity
+            write(14,'(A,F10.6)') '   Controller gain: ', controller_gain
+            write(14,'(A,I0)') '   Update frequency: ', controller_update_freq
+        endif
+        write(14,'(A)') ' '
+        write(14,'(A)') ' OUTPUT FILES:'
+        write(14,'(A)') '   - simulation_summary.txt (this file)'
+        write(14,'(A)') '   - output_time_series.dat (time evolution)'
+        write(14,'(A)') '   - flow_statistics.dat (statistical summaries)'
+        write(14,'(A)') '   - velocity_field_XXXXX.dat (field snapshots)'
+        write(14,'(A)') '   - spanwise_profile_XXXXX.dat (averaged profiles)'
+        write(14,'(A)') ' '
+        write(14,'(A)') ' RESTART CONFIGURATION (Phase 5):'
+        write(14,'(A,I0)') '   Restart write frequency: ', restart_write_freq
+        write(14,'(A,A)') '   Restart filename: ', trim(restart_filename)
+        if (restart_from_file) then
+            write(14,'(A)') '   Restart mode: ENABLED (restarting from checkpoint)'
+            write(14,'(A,I0)') '   Restart step: ', restart_step
+            write(14,'(A,F12.6)') '   Restart time: ', restart_time
+        else
+            write(14,'(A)') '   Restart mode: DISABLED (new simulation)'
+        endif
+        write(14,'(A)') ' '
+        write(14,'(A)') '============================================'
+        
+        close(14)
+        
+        write(*,'(A)') ' Simulation summary written: simulation_summary.txt'
+        
+    end subroutine write_simulation_summary
+
+!============================================================================
+! SUBROUTINE: initialize_output_files
+!
+! PURPOSE:
+!   Initialize output files for time series, field data, and statistics
+!============================================================================
+    subroutine initialize_output_files()
+        implicit none
+        character(len=512) :: filepath
+        
+        ! Create output directory first
+        call create_output_directory()
+        
+        ! Time series file header
+        filepath = trim(output_directory) // '/output_time_series.dat'
+        open(unit=10, file=trim(filepath), status='replace')
+        write(10,'(A)') '# DNS 3D Time Series Data'
+        write(10,'(A)') '# Columns: step, time, u_max, v_max, w_max, energy, pressure_gradient, bulk_velocity'
+        close(10)
+        
+        ! Flow statistics file header
+        filepath = trim(output_directory) // '/flow_statistics.dat'
+        open(unit=11, file=trim(filepath), status='replace')
+        write(11,'(A)') '# DNS 3D Flow Statistics Summary'
+        write(11,'(A)') '# Updated periodically during simulation'
+        close(11)
+        
+        write(*,'(A)') ' Output files initialized in directory:'
+        write(*,'(A,A)') '   ', trim(output_directory)
+        write(*,'(A)') '   - output_time_series.dat (time series data)'
+        write(*,'(A)') '   - flow_statistics.dat (statistical summaries)'
+        write(*,'(A)') '   - velocity_field_XXXXX.dat (field snapshots)'
+        
+    end subroutine initialize_output_files
+
+!============================================================================
+! SUBROUTINE: write_time_series_data
+!
+! PURPOSE:
+!   Append current time step data to time series file
+!============================================================================
+    subroutine write_time_series_data(istep)
+        implicit none
+        integer, intent(in) :: istep
+        real(wp) :: umax, vmax, wmax, energy
+        real(wp) :: dx_dy_factor, u_local, v_local, w_local, zwt_local
+        integer :: i, j, k
+        character(len=512) :: filepath
+        
+        ! Compute diagnostics
+        umax = maxval(abs(u))
+        vmax = maxval(abs(v))
+        wmax = maxval(abs(w))
+        
+        ! Compute kinetic energy
+        energy = 0.0_wp
+        dx_dy_factor = (xlen/real(nx,wp)) * (ylen/real(ny,wp)) * (ybar / 2.0_wp)
+        
+        do i = 1, nx
+            do j = 1, ny  
+                do k = 1, nz
+                    u_local = u(i,j,k)
+                    v_local = v(i,j,k)
+                    w_local = w(i,j,k)
+                    zwt_local = zwts(k)
+                    
+                    energy = energy + 0.5_wp * (u_local*u_local + v_local*v_local + w_local*w_local) * &
+                             dx_dy_factor * zwt_local
+                end do
+            end do
+        end do
+        energy = energy / (xlen * ylen * ybar)
+        
+        ! Write to time series file
+        filepath = trim(output_directory) // '/output_time_series.dat'
+        open(unit=10, file=trim(filepath), status='old', position='append')
+        if (flow_control_method == 2) then
+            call calculate_bulk_velocity_3d(current_bulk_velocity)
+            ! Use time-averaged pressure gradient for file output (Method 2 Fix)
+            write(10,'(I8,7(ES15.6))') istep, time, umax, vmax, wmax, energy, &
+                                       avg_pressure_gradient, current_bulk_velocity
+        else
+            write(10,'(I8,6(ES15.6))') istep, time, umax, vmax, wmax, energy, &
+                                       current_pressure_gradient
+        endif
+        close(10)
+        
+    end subroutine write_time_series_data
+
+!============================================================================
+! SUBROUTINE: write_velocity_field_snapshot
+!
+! PURPOSE:
+!   Write velocity field snapshot for detailed analysis
+!============================================================================
+    subroutine write_velocity_field_snapshot(istep)
+        implicit none
+        integer, intent(in) :: istep
+        character(len=512) :: filepath
+        character(len=32) :: filename
+        integer :: i, j, k
+        real(wp) :: x_coord, y_coord, z_coord
+        
+        ! Create filename with step number
+        write(filename, '(A,I5.5,A)') 'velocity_field_', istep, '.dat'
+        filepath = trim(output_directory) // '/' // trim(filename)
+        
+        open(unit=12, file=trim(filepath), status='replace')
+        write(12,'(A)') '# DNS 3D Velocity Field Snapshot'
+        write(12,'(A,I0)') '# Time step: ', istep
+        write(12,'(A,F12.6)') '# Time: ', time
+        write(12,'(A)') '# Columns: i, j, k, x, y, z, u, v, w'
+        
+        do k = 1, nz
+            do j = 1, ny
+                do i = 1, nx
+                    ! Calculate coordinates
+                    x_coord = real(i-1, wp) * xlen / real(nx, wp)
+                    y_coord = real(j-1, wp) * ylen / real(ny, wp)
+                    z_coord = zpts(k)
+                    
+                    write(12,'(3I6,6ES15.6)') i, j, k, x_coord, y_coord, z_coord, &
+                                              u(i,j,k), v(i,j,k), w(i,j,k)
+                end do
+            end do
+        end do
+        close(12)
+        
+        write(*,'(A,A)') ' Velocity field snapshot written: ', trim(filename)
+        
+    end subroutine write_velocity_field_snapshot
+
+!============================================================================
+! SUBROUTINE: write_spanwise_averaged_profile
+!
+! PURPOSE:
+!   Write spanwise-averaged velocity profile for analysis
+!============================================================================
+    subroutine write_spanwise_averaged_profile(istep)
+        implicit none
+        integer, intent(in) :: istep
+        character(len=512) :: filepath
+        character(len=32) :: filename
+        integer :: i, j, k
+        real(wp) :: u_avg, v_avg, w_avg
+        
+        ! Create filename with step number
+        write(filename, '(A,I5.5,A)') 'spanwise_profile_', istep, '.dat'
+        filepath = trim(output_directory) // '/' // trim(filename)
+        
+        open(unit=13, file=trim(filepath), status='replace')
+        write(13,'(A)') '# DNS 3D Spanwise-Averaged Velocity Profile'
+        write(13,'(A,I0)') '# Time step: ', istep
+        write(13,'(A,F12.6)') '# Time: ', time
+        write(13,'(A)') '# Columns: k, z, u_avg, v_avg, w_avg'
+        
+        do k = 1, nz
+            ! Compute spanwise averages
+            u_avg = 0.0_wp
+            v_avg = 0.0_wp
+            w_avg = 0.0_wp
+            
+            do j = 1, ny
+                do i = 1, nx
+                    u_avg = u_avg + u(i,j,k)
+                    v_avg = v_avg + v(i,j,k)
+                    w_avg = w_avg + w(i,j,k)
+                end do
+            end do
+            
+            u_avg = u_avg / real(nx*ny, wp)
+            v_avg = v_avg / real(nx*ny, wp)
+            w_avg = w_avg / real(nx*ny, wp)
+            
+            write(13,'(I6,4ES15.6)') k, zpts(k), u_avg, v_avg, w_avg
+        end do
+        close(13)
+        
+        write(*,'(A,A)') ' Spanwise profile written: ', trim(filename)
+        
+    end subroutine write_spanwise_averaged_profile
+
+!============================================================================
+! SUBROUTINE: write_flow_statistics
+!
+! PURPOSE:
+!   Write comprehensive flow statistics summary
+!============================================================================
+    subroutine write_flow_statistics(istep)
+        implicit none
+        integer, intent(in) :: istep
+        real(wp) :: umax, vmax, wmax, energy
+        real(wp) :: dx_dy_factor, u_local, v_local, w_local, zwt_local
+        real(wp) :: bulk_velocity, wall_shear_lower, wall_shear_upper
+        real(wp) :: nu, du_dz_lower, du_dz_upper
+        integer :: i, j, k
+        character(len=512) :: filepath
+        
+        ! Compute basic statistics
+        umax = maxval(abs(u))
+        vmax = maxval(abs(v))
+        wmax = maxval(abs(w))
+        
+        ! Compute energy
+        energy = 0.0_wp
+        dx_dy_factor = (xlen/real(nx,wp)) * (ylen/real(ny,wp)) * (ybar / 2.0_wp)
+        
+        do i = 1, nx
+            do j = 1, ny  
+                do k = 1, nz
+                    u_local = u(i,j,k)
+                    v_local = v(i,j,k)
+                    w_local = w(i,j,k)
+                    zwt_local = zwts(k)
+                    
+                    energy = energy + 0.5_wp * (u_local*u_local + v_local*v_local + w_local*w_local) * &
+                             dx_dy_factor * zwt_local
+                end do
+            end do
+        end do
+        energy = energy / (xlen * ylen * ybar)
+        
+        ! Compute bulk velocity
+        if (flow_control_method == 2) then
+            call calculate_bulk_velocity_3d(bulk_velocity)
+        else
+            bulk_velocity = 0.0_wp
+            ! Calculate bulk velocity manually for method 1
+            do k = 1, nz
+                do j = 1, ny
+                    do i = 1, nx
+                        bulk_velocity = bulk_velocity + u(i,j,k) * zwts(k)
+                    end do
+                end do
+            end do
+            bulk_velocity = bulk_velocity / real(nx*ny, wp)
+            bulk_velocity = bulk_velocity / 2.0_wp  ! Normalize by channel height
+        endif
+        
+        ! Estimate wall shear stress using finite differences
+        nu = 1.0_wp / re
+        
+        ! Lower wall (k=1) using forward difference
+        du_dz_lower = 0.0_wp
+        do j = 1, ny
+            do i = 1, nx
+                du_dz_lower = du_dz_lower + (u(i,j,2) - u(i,j,1)) / (zpts(2) - zpts(1))
+            end do
+        end do
+        du_dz_lower = du_dz_lower / real(nx*ny, wp)
+        wall_shear_lower = nu * du_dz_lower
+        
+        ! Upper wall (k=nz) using backward difference  
+        du_dz_upper = 0.0_wp
+        do j = 1, ny
+            do i = 1, nx
+                du_dz_upper = du_dz_upper + (u(i,j,nz) - u(i,j,nz-1)) / (zpts(nz) - zpts(nz-1))
+            end do
+        end do
+        du_dz_upper = du_dz_upper / real(nx*ny, wp)
+        wall_shear_upper = nu * du_dz_upper
+        
+        ! Write statistics file
+        filepath = trim(output_directory) // '/flow_statistics.dat'
+        open(unit=11, file=trim(filepath), status='replace')
+        write(11,'(A)') '# DNS 3D Flow Statistics Summary'
+        write(11,'(A,I0)') '# Time step: ', istep
+        write(11,'(A,F12.6)') '# Time: ', time
+        write(11,'(A)')
+        write(11,'(A,ES15.6)') '# Maximum velocities:'
+        write(11,'(A,ES15.6)') 'u_max = ', umax
+        write(11,'(A,ES15.6)') 'v_max = ', vmax
+        write(11,'(A,ES15.6)') 'w_max = ', wmax
+        write(11,'(A)')
+        write(11,'(A,ES15.6)') '# Energy and bulk flow:'
+        write(11,'(A,ES15.6)') 'kinetic_energy = ', energy
+        write(11,'(A,ES15.6)') 'bulk_velocity = ', bulk_velocity
+        ! Use time-averaged pressure gradient for Method 2 (Fix)
+        if (flow_control_method == 2) then
+            write(11,'(A,ES15.6)') 'pressure_gradient = ', avg_pressure_gradient
+        else
+            write(11,'(A,ES15.6)') 'pressure_gradient = ', current_pressure_gradient
+        endif
+        write(11,'(A)')
+        write(11,'(A,ES15.6)') '# Wall shear stress:'
+        write(11,'(A,ES15.6)') 'tau_wall_lower = ', wall_shear_lower
+        write(11,'(A,ES15.6)') 'tau_wall_upper = ', wall_shear_upper
+        write(11,'(A,ES15.6)') 'friction_velocity_avg = ', sqrt((abs(wall_shear_lower) + abs(wall_shear_upper))/2.0_wp)
+        write(11,'(A,ES15.6)') 're_tau = ', sqrt((abs(wall_shear_lower) + abs(wall_shear_upper))/2.0_wp) * re
+        close(11)
+        
+    end subroutine write_flow_statistics
+
+
+! =====================================================================================
+! RESTART I/O FUNCTIONS (Phase 2 Implementation)
+! =====================================================================================
+
+! SUBROUTINE: write_restart_file_3d
+! 
+! PURPOSE:
+!   Write complete simulation state to binary restart file for checkpointing.
+!   Saves all velocity fields, pressure, time information, and grid parameters.
+!
+! INPUTS:
+!   istep     - Current time step number
+!   time      - Current simulation time
+!   
+! OUTPUTS:
+!   Creates restart.dat file in output directory
+!
+! DEPENDENCIES:
+!   - All velocity and pressure arrays must be allocated
+!   - Output directory must exist
+!
+    subroutine write_restart_file_3d(istep, time)
+        implicit none
+        integer, intent(in) :: istep
+        real(wp), intent(in) :: time
+        
+        character(len=512) :: filepath
+        integer :: io_status, restart_unit
+        
+        ! Construct full path for restart file (use default restart.dat name for writing)
+        filepath = trim(output_directory) // '/restart.dat'
+        
+        ! Open restart file for binary writing
+        restart_unit = 15
+        open(restart_unit, file=trim(filepath), form='unformatted', access='stream', &
+             status='replace', iostat=io_status)
+             
+        if (io_status /= 0) then
+            write(*,'(A,A)') ' ERROR: Cannot create restart file: ', trim(filepath)
+            write(*,'(A,I0)') ' I/O error code: ', io_status
+            return
+        endif
+        
+        ! Write restart file header (for validation)
+        write(restart_unit, iostat=io_status) 'DNS3D_RESTART_v1.0'
+        
+        ! Write time and step information
+        write(restart_unit, iostat=io_status) istep, time, dt
+        
+        ! Write grid dimensions
+        write(restart_unit, iostat=io_status) nx, ny, nz
+        
+        ! Write physical parameters (needed for validation)
+        write(restart_unit, iostat=io_status) re, alpha, beta
+        
+        ! Write all velocity field components
+        write(restart_unit, iostat=io_status) u
+        write(restart_unit, iostat=io_status) v  
+        write(restart_unit, iostat=io_status) w
+        
+        ! Write previous velocity components (for multi-step schemes)
+        write(restart_unit, iostat=io_status) un
+        write(restart_unit, iostat=io_status) vn
+        write(restart_unit, iostat=io_status) wn
+        
+        ! Write pressure field
+        write(restart_unit, iostat=io_status) p_total
+        
+        ! Write flow control state variables
+        write(restart_unit, iostat=io_status) current_pressure_gradient
+        write(restart_unit, iostat=io_status) current_bulk_velocity
+        write(restart_unit, iostat=io_status) bulk_velocity_error_integral
+        write(restart_unit, iostat=io_status) bulk_velocity_error_prev  ! For trapezoidal integration
+        
+        close(restart_unit)
+        
+        if (io_status == 0) then
+            write(*,'(A,I0,A,F12.6,A)') ' ✓ Restart file written at step ', istep, &
+                                        ', time = ', time, ' to ' // trim(filepath)
+        else
+            write(*,'(A,A)') ' ERROR: Failed to write restart file: ', trim(filepath)
+        endif
+        
+    end subroutine write_restart_file_3d
+
+
+! SUBROUTINE: read_restart_file_3d
+! 
+! PURPOSE:
+!   Read complete simulation state from binary restart file to resume simulation.
+!   Loads all velocity fields, pressure, time information, and validates compatibility.
+!
+! OUTPUTS:
+!   istep_out - Time step number from restart file
+!   time_out  - Simulation time from restart file
+!   success   - Logical flag indicating successful read
+!   
+! SIDE EFFECTS:
+!   - Updates all velocity and pressure arrays
+!   - Updates flow control state variables
+!   - Sets restart_step and restart_time module variables
+!
+    subroutine read_restart_file_3d(istep_out, time_out, success)
+        implicit none
+        integer, intent(out) :: istep_out
+        real(wp), intent(out) :: time_out
+        logical, intent(out) :: success
+        
+        character(len=512) :: filepath
+        character(len=18) :: header_check
+        integer :: io_status, restart_unit
+        integer :: nx_file, ny_file, nz_file
+        real(wp) :: re_file, alpha_file, beta_file, dt_file
+        
+        ! Initialize outputs
+        success = .false.
+        istep_out = 0
+        time_out = 0.0_wp
+        
+        ! Construct full path for restart file (use variable restart_filename)
+        filepath = trim(output_directory) // '/' // trim(restart_filename)
+        
+        ! Check if restart file exists
+        restart_unit = 16
+        open(restart_unit, file=trim(filepath), form='unformatted', access='stream', &
+             status='old', iostat=io_status)
+             
+        if (io_status /= 0) then
+            write(*,'(A,A)') ' WARNING: Restart file not found: ', trim(filepath)
+            return
+        endif
+        
+        ! Read and validate header
+        read(restart_unit, iostat=io_status) header_check
+        if (io_status /= 0 .or. trim(header_check) /= 'DNS3D_RESTART_v1.0') then
+            write(*,'(A)') ' ERROR: Invalid restart file header'
+            close(restart_unit)
+            return
+        endif
+        
+        ! Read time and step information
+        read(restart_unit, iostat=io_status) istep_out, time_out, dt_file
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read time information from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        ! Read and validate grid dimensions
+        read(restart_unit, iostat=io_status) nx_file, ny_file, nz_file
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read grid dimensions from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        if (nx_file /= nx .or. ny_file /= ny .or. nz_file /= nz) then
+            write(*,'(A)') ' ERROR: Grid dimensions in restart file do not match current setup'
+            write(*,'(A,3I0)') ' Current grid: ', nx, ny, nz
+            write(*,'(A,3I0)') ' File grid:    ', nx_file, ny_file, nz_file
+            close(restart_unit)
+            return
+        endif
+        
+        ! Read and validate physical parameters
+        read(restart_unit, iostat=io_status) re_file, alpha_file, beta_file
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read physical parameters from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        ! Warn about parameter mismatches (but continue)
+        if (abs(re_file - re) > 1.0e-12_wp) then
+            write(*,'(A,F12.6,A,F12.6)') ' WARNING: Reynolds number mismatch: file=', re_file, ', current=', re
+        endif
+        
+        ! Read all velocity field components
+        read(restart_unit, iostat=io_status) u
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read u-velocity from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        read(restart_unit, iostat=io_status) v
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read v-velocity from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        read(restart_unit, iostat=io_status) w
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read w-velocity from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        ! Read previous velocity components
+        read(restart_unit, iostat=io_status) un
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read previous u-velocity from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        read(restart_unit, iostat=io_status) vn
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read previous v-velocity from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        read(restart_unit, iostat=io_status) wn
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read previous w-velocity from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        ! Read pressure field
+        read(restart_unit, iostat=io_status) p_total
+        if (io_status /= 0) then
+            write(*,'(A)') ' ERROR: Cannot read pressure field from restart file'
+            close(restart_unit)
+            return
+        endif
+        
+        ! Read flow control state variables
+        read(restart_unit, iostat=io_status) current_pressure_gradient
+        read(restart_unit, iostat=io_status) current_bulk_velocity
+        read(restart_unit, iostat=io_status) bulk_velocity_error_integral
+        read(restart_unit, iostat=io_status) bulk_velocity_error_prev  ! For trapezoidal integration
+        if (io_status /= 0) then
+            write(*,'(A)') ' WARNING: Cannot read flow control state (using defaults)'
+            ! Reset to safe defaults
+            current_pressure_gradient = target_pressure_gradient
+            current_bulk_velocity = 0.0_wp
+            bulk_velocity_error_integral = 0.0_wp
+            bulk_velocity_error_prev = 0.0_wp  ! Initialize for trapezoidal integration
+        endif
+        
+        close(restart_unit)
+        
+        ! Store restart information in module variables
+        restart_step = istep_out
+        restart_time = time_out
+        
+        ! Success!
+        success = .true.
+        write(*,'(A,I0,A,F12.6,A)') ' ✓ Restart file read successfully: step ', istep_out, &
+                                    ', time = ', time_out, ' from ' // trim(filepath)
+        
+    end subroutine read_restart_file_3d
 
 
 end program dns_3d

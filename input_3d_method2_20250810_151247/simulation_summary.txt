@@ -1,0 +1,41 @@
+============================================
+   3D DNS SIMULATION SUMMARY
+============================================
+ 
+ Input file: input_3d_method2.dat
+ Output directory: input_3d_method2_20250810_151247
+ Start time: 2025-08-10
+             15:12:47
+ 
+ GRID PARAMETERS:
+   Grid size: 64 × 32 × 33
+   Domain Lx:  12.5664
+   Domain Ly:   6.2832
+   Domain Lz:   2.0000
+ 
+ SIMULATION PARAMETERS:
+   Reynolds number:   500.0000
+   Time step:   0.010000
+   Total steps: 20000
+   Output frequency: 1000
+   Total time:   200.0000
+ 
+ FLOW CONTROL:
+   Method: 2
+   Target bulk velocity:   1.000000
+   Controller gain:   0.100000
+   Update frequency: 1
+ 
+ OUTPUT FILES:
+   - simulation_summary.txt (this file)
+   - output_time_series.dat (time evolution)
+   - flow_statistics.dat (statistical summaries)
+   - velocity_field_XXXXX.dat (field snapshots)
+   - spanwise_profile_XXXXX.dat (averaged profiles)
+ 
+ RESTART CONFIGURATION (Phase 5):
+   Restart write frequency: 1000
+   Restart filename: restart.dat
+   Restart mode: DISABLED (new simulation)
+ 
+============================================

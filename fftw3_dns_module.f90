@@ -26,6 +26,28 @@ module fftw3_dns_module
 contains
 
     !---------------------------------------------------------------------------
+    ! SUBROUTINE: fftw3_initialize_threading
+    !
+    ! Initialize FFTW with OpenMP threading support
+    !---------------------------------------------------------------------------
+    subroutine fftw3_initialize_threading()
+        implicit none
+        integer :: num_threads, ierr
+        
+        ! Initialize FFTW threading
+        ierr = fftw_init_threads()
+        if (ierr /= 0) then
+            ! Set number of threads (use environment variable or default to 4)
+            num_threads = 4
+            call fftw_plan_with_nthreads(num_threads)
+            write(*,'(A,I0,A)') ' FFTW threading initialized with ', num_threads, ' threads'
+        else
+            write(*,'(A)') ' FFTW threading initialization failed, using single thread'
+        endif
+        
+    end subroutine fftw3_initialize_threading
+
+    !---------------------------------------------------------------------------
     ! SUBROUTINE: setup_fftw3_plans_dns
     !
     ! Creates FFTW3 plans for the DNS solver FFT operations with wisdom and optimization
@@ -122,8 +144,9 @@ contains
             call fftw_destroy_plan(plans%plan_forward)
             call fftw_destroy_plan(plans%plan_backward)
             call fftw_cleanup()
+            call fftw_cleanup_threads()  ! Clean up threading
             plans%initialized = .false.
-            write(*,'(A)') ' FFTW3 plans destroyed'
+            write(*,'(A)') ' FFTW3 plans destroyed and threading cleaned up'
         end if
         
     end subroutine destroy_fftw3_plans_dns
