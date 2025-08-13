@@ -1,0 +1,143 @@
+ ============================================
+   3D DNS SOLVER - CHANNEL FLOW
+   Phase 1: Data Structure Implementation
+ ============================================
+ Using specified input file: input_3d_debug_weak_form.dat
+ Input read from input_3d_debug_weak_form.dat
+ Grid: 32×32×17
+ Reynolds number:      500.0
+ Time step:  0.00200
+ Number of steps: 15
+ Start from step: 0
+ Output frequency: 1
+ Domain: Lx=  6.2832, Ly=  3.1416
+ Wavenumbers: α= 1.000, β= 1.000
+ Use Crank-Nicolson: T
+ Flow control method: 1
+ Target pressure gradient:   0.006000
+ Enable perturbations: T
+ Perturbation amplitude:   1.0000% of base flow
+ Zero w-component: F
+ Use analytical perturbations: T
+ Analytical modes: mx=1, my=1
+ Total 3D grid points: 19652
+ Alpha (x-wavenumber):     1.000000
+ Beta (y-wavenumber):     2.000000
+ ybar (z-domain length):     2.000000
+ Spectral methods initialized
+ Max x-wavenumber:  16.0000
+ Max y-wavenumber:  32.0000
+ Z-range:  -1.0000 to   1.0000
+ Min zpts diff:   0.0269
+ FFTW threading initialized with 4 threads
+ Setting up FFTW3 plans for 32x32 grid
+ Complex storage: 17x32
+ Using FFTW_MEASURE for optimal plan creation
+ FFTW3 plans created successfully with FFTW_MEASURE
+ All 3D arrays allocated successfully
+================================================================================
+🌊 APPLYING SOLENOIDAL PERTURBATIONS TO CHANNEL FLOW
+================================================================================
+🎯 Using analytical perturbation method
+🎯 Generating simple analytical perturbations...
+   Modes: mx=1, my=1
+   Amplitude:   0.0100
+   Scaled from max=  2.0000E+00 to max=  1.0000E-02
+   Wall boundary conditions enforced
+✅ Analytical perturbations generated successfully
+📊 Analytical Perturbation Divergence Check:
+   Maximum divergence:   2.1368E-17
+   RMS divergence:       3.5084E-18
+✅ Perfect divergence-free property (machine precision)
+🔍 Validating solenoidal condition for channel flow...
+======================================================================
+🔍 DIVERGENCE-FREE VALIDATION RESULTS
+======================================================================
+   Maximum |∇·v|:  0.30436E-14
+   Mean ∇·v:       0.34737E-21
+   RMS ∇·v:        0.41799E-15
+   |∇·v| at center:  0.43051E-15
+   ✅ EXCELLENT: Machine precision divergence-free
+======================================================================
+📊 Perturbation Statistics:
+   Energy [Total, u, v, w]:  0.56767E-05 0.45413E-05 0.11353E-05 0.00000E+00
+   Max |velocity| [u, v, w]:  0.10000E-01 0.50000E-02 0.00000E+00
+   RMS velocity:  0.33695E-02
+   Energy [lower, upper half]:  0.62294E-05 0.50549E-05
+   Energy ratio (upper/lower):   0.8115
+✅ Solenoidal perturbations applied successfully
+================================================================================
+ 3D flow fields initialized
+ Flow control: current pressure gradient =   0.006000
+ Step      0, Max divergence:   0.3044E-14
+ 3D boundary conditions set
+ Output directory created:
+   input_3d_debug_weak_form_20250813_125832
+ Output files initialized in directory:
+   input_3d_debug_weak_form_20250813_125832
+   - output_time_series.dat (time series data)
+   - flow_statistics.dat (statistical summaries)
+   - velocity_field_XXXXX.dat (field snapshots)
+ Simulation summary written: simulation_summary.txt
+ WARNING: Restart file not found: input_3d_debug_weak_form_20250813_125832/restart.dat
+ ============================================
+   STARTING NEW SIMULATION
+   No restart requested
+ ============================================
+ Starting main time integration...
+ Step      1, t=    0.002000, |u|max=  1.5100E+00, |v|max=  4.9999E-03, |w|max=  3.1233E-05, E=  6.0001E-01, dP/dx=  6.0000E-03
+ Step      2, t=    0.004000, |u|max=  1.5100E+00, |v|max=  4.9994E-03, |w|max=  5.2246E-05, E=  6.0001E-01, dP/dx=  6.0000E-03
+ Step      3, t=    0.006000, |u|max=  1.5100E+00, |v|max=  5.0068E-03, |w|max=  6.6442E-05, E=  6.0001E-01, dP/dx=  6.0000E-03
+ Step      4, t=    0.008000, |u|max=  1.5100E+00, |v|max=  5.1090E-03, |w|max=  7.6107E-05, E=  6.0001E-01, dP/dx=  6.0000E-03
+ Step      5, t=    0.010000, |u|max=  1.5100E+00, |v|max=  5.4209E-03, |w|max=  8.2776E-05, E=  6.0001E-01, dP/dx=  6.0000E-03
+ Step      6, t=    0.012000, |u|max=  1.5102E+00, |v|max=  6.4790E-03, |w|max=  8.7492E-05, E=  6.0001E-01, dP/dx=  6.0000E-03
+ Step      7, t=    0.014000, |u|max=  1.5107E+00, |v|max=  9.6546E-03, |w|max=  9.0971E-05, E=  6.0002E-01, dP/dx=  6.0000E-03
+ Step      8, t=    0.016000, |u|max=  1.5127E+00, |v|max=  1.7143E-02, |w|max=  9.3716E-05, E=  6.0005E-01, dP/dx=  6.0000E-03
+ Step      9, t=    0.018000, |u|max=  1.5190E+00, |v|max=  3.3215E-02, |w|max=  9.6091E-05, E=  6.0017E-01, dP/dx=  6.0000E-03
+ Step     10, t=    0.020000, |u|max=  1.5339E+00, |v|max=  6.5667E-02, |w|max=  9.8358E-05, E=  6.0067E-01, dP/dx=  6.0000E-03
+ Velocity field snapshot written: velocity_field_00010.dat
+ Spanwise profile written: spanwise_profile_00010.dat
+ Step     11, t=    0.022000, |u|max=  1.5659E+00, |v|max=  1.3120E-01, |w|max=  1.0066E-04, E=  6.0267E-01, dP/dx=  6.0000E-03
+ Step     12, t=    0.024000, |u|max=  1.6307E+00, |v|max=  2.6225E-01, |w|max=  1.0280E-04, E=  6.1065E-01, dP/dx=  6.0000E-03
+ Step     13, t=    0.026000, |u|max=  1.7617E+00, |v|max=  5.2433E-01, |w|max=  1.0335E-04, E=  6.4260E-01, dP/dx=  6.0000E-03
+ Step     14, t=    0.028000, |u|max=  2.0238E+00, |v|max=  1.0485E+00, |w|max=  1.0672E-04, E=  7.7042E-01, dP/dx=  6.0000E-03
+ Step     15, t=    0.030000, |u|max=  2.5480E+00, |v|max=  2.0967E+00, |w|max=  2.7447E-04, E=  1.2817E+00, dP/dx=  6.0000E-03
+ ✓ Restart file written at step 15, time =     0.030000 to input_3d_debug_weak_form_20250813_125832/restart.dat
+ ========================================================
+               SIMULATION COMPLETED SUCCESSFULLY
+ ========================================================
+
+ FINAL PERFORMANCE SUMMARY:
+ ----------------------------------------
+ Total simulation time:       0.030000 (non-dimensional)
+ Total time steps:       15 steps
+ Total wall clock time:       1.879 seconds
+ Average time per step:    0.125255 seconds
+ Fastest step time:        0.114577 seconds
+ Slowest step time:        0.132996 seconds
+ Performance:                 8.0 steps/second
+
+ FINAL SIMULATION STATE:
+ ----------------------------------------
+ Final time:                 0.030000
+ Time steps completed:   15
+ Max divergence:           3.0436E-15
+
+ OUTPUT FILES GENERATED:
+ ----------------------------------------
+ Output directory:       input_3d_debug_weak_form_20250813_125832
+ Files created:
+   ✓ output_time_series.dat    (time evolution data)
+   ✓ flow_statistics.dat       (final flow statistics)
+   ✓ simulation_summary.txt    (run parameters)
+   ✓ velocity_field snapshots  (periodic velocity data)
+   ✓ spanwise_profile data     (wall-normal profiles)
+
+ ========================================================
+      3D DNS SIMULATION ANALYSIS READY FOR PROCESSING
+ ========================================================
+
+ Time integration completed successfully!
+ ============================================
+ FFTW3 plans destroyed and threading cleaned up
+ Memory cleanup completed

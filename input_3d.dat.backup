@@ -1,19 +1,47 @@
 &grid
-  nx_input = 64,
-  ny_input = 32, 
+  nx_input = 128,
+  ny_input = 32,
   nz_input = 33
 /
 
-&simulationplea
-  re = 100.0,
-  dt = 0.001,
-  nsteps = 300,
-  xlen = 6.283185307179586,
-  ylen = 6.283185307179586,
-  viscous_scheme_name = 'crank-nicolson'
+&time_control
+  istart = 0,
+  dt = 0.01,
+  nsteps = 1000,
+  nwrt = 100,
+  restart_write_freq = 1000
+/
+
+&simulation
+  alpha = 1.0,
+  beta = 1.0,
+  re = 180.0,
+  ta = 0.0,
+  ybar = 2.0,
+  cgstol = 1e-6,
+  cs = 0.1,
+  u00 = 0.0,
+  wavlen = 1.0,
+  xlen = 6.283185307,
+  ylen = 6.283185307,
+  u_centerline = 1.5,
+  use_crank_nicolson = .true.
+/
+
+&output
+  iform = 0,
+  iles = 0
 /
 
 &flow_control
   flow_control_method = 1,
-  target_pressure_gradient = 0.03
+  target_pressure_gradient = 0.0166666,
+  target_bulk_velocity = 1.0,
+  controller_gain = 0.15,
+  controller_update_freq = 7
+/
+
+&perturbations
+  enable_perturbations = .true.,
+  perturbation_amplitude = 0.01
 /

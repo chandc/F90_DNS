@@ -12,7 +12,7 @@ INCLUDES = -I/opt/homebrew/include
 LIBPATHS = -L/opt/homebrew/lib
 
 # Source files (updated to use FFTW3)
-SRCS = lgl_module.f90 fftw3_dns_module.f90 DNS_pressure_BC_3D.f90
+SRCS = lgl_module.f90 fftw3_dns_module.f90 perturbation_module.f90 perturbation_analytical_simple.f90 DNS_pressure_BC_3D.f90
 # Object files
 OBJS = $(SRCS:.f90=.o)
 
@@ -38,7 +38,9 @@ $(TARGET): $(OBJS)
 # Dependencies to enforce correct compilation order (updated for FFTW3)
 # By listing the .o files as prerequisites, we ensure the corresponding
 # .mod files are created before they are needed.
-DNS_pressure_BC_3D.o: fftw3_dns_module.o lgl_module.o
+DNS_pressure_BC_3D.o: fftw3_dns_module.o lgl_module.o perturbation_module.o perturbation_analytical_simple.o
+perturbation_module.o: lgl_module.o fftw3_dns_module.o
+perturbation_analytical_simple.o: # No dependencies (standalone analytical module)
 fftw3_dns_module.o: # No dependencies (standalone FFTW3 module)
 
 # Clean
